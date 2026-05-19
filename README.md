@@ -80,6 +80,27 @@ kubectl apply -f k8s/
 kubectl port-forward -n wyd-system svc/wyd-server 8080:80
 ```
 
+## Desktop Environment Integration (rofi)
+
+If you use **rofi** to launch desktop applications, a custom modi script is provided to automatically wrap all launches with `wydrun` — no need to modify individual `.desktop` files.
+
+```bash
+# In your WM config (i3/sway/dwm/etc.), replace:
+#   rofi -show drun
+# With:
+rofi -modi drun:$HOME/what-you-are-doing/scripts/wyd-rofi-drun -show drun
+```
+
+The script scans `.desktop` files, displays them in rofi (with icons), and executes the selected application through `wydrun` with the app name set as `alias`.
+
+### Prerequisites
+
+```bash
+export WYDRUN_SERVER="http://localhost:8080"
+export WYDRUN_TOKEN="wyd_xxxxx"
+chmod +x scripts/wyd-rofi-drun
+```
+
 ## Architecture
 
 - **Server**: Rust (axum) + SQLite (WAL mode) + native SVG generation

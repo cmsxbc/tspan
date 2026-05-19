@@ -1,0 +1,108 @@
+#!/bin/bash
+# WYD Rofi Desktop Runner
+# Usage: rofi -modi drun:"$PWD/scripts/wyd-rofi-drun" -show drun
+#
+# Or replace your existing rofi shortcut with:
+#   rofi -modi drun:/path/to/wyd-rofi-drun -show drun
+
+set -e
+
+# ---- config ----
+export WYDRUN_SERVER="${WYDRUN_SERVER:-http://localhost:8080}"
+export WYDRUN_TOKEN="${WYDRUN_TOKEN:-}"
+export WYDRUN_CLIENT="${WYDRUN_CLIENT:-$(hostname)}"
+
+# Find the real wydrun path
+WYDRUN="${WYDRUN_PATH:-$(command -v wydrun || echo "$HOME/what-you-are-doing/wydrun")}"
+
+# Desktop directories to scan
+DESKTOP_DIRS=(
+    "$HOME/.local/share/applications"
+    /usr/share/applications
+    /usr/local/share/applications
+)
+
+# Cache file for performance
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/wyd-rofi-drun"
+mkdir -p "$CACHE_DIR"
+CACHE_FILE="$CACHE_DIR/desktop.cache"
+
+# ---- helpers ----
+parse_desktop_file() {
+    local file="$1"
+    local name="" exec_cmd="" icon="" nodisplay="" hidden=""
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            "Name="*) name="${line#Name=}" ;;
+            "Exec="*) exec_cmd="${line#Exec=}" ;;
+            "Icon="*) icon="${line#Icon=}" ;;
+            "NoDisplay=true") nodisplay=1 ;;
+            "Hidden=true") hidden=1 ;;
+        esac
+    done < "$file"
+
+    # Skip hidden/NoDisplay entries
+    [[ "$nodisplay" == 1 || "$hidden" == 1 ]] && return
+
+    # Clean Exec field: remove field codes (%f, %F, %u, %U, %i, %c, %k)
+    exec_cmd="$(echo "$exec_cmd" | sed -E 's/%[fFuUiIcCkK]//g' | sed 's/[[:space:]]*$//')"
+
+    # Skip entries without Exec or with URL handlers
+    [[ -z "$exec_cmd" ]] && return
+    [[ "$exec_cmd" == *"xdg-open"* ]] && return
+
+    echo -e "${name}\t${exec_cmd}\t${icon}\t${file}"
+}
+
+build_cache() {
+    > "$CACHE_FILE"
+    for dir in "${DESKTOP_DIRS[@]}"; do
+        [[ -d "$dir" ]] || continue
+        while IFS= read -r -d '' file; do
+            parse_desktop_file "$file" >> "$CACHE_FILE" 2>/dev/null || true
+        done < <(find "$dir" -maxdepth 1 -name "*.desktop" -print0 2>/dev/null)
+    done
+}
+
+# If no selection (first run), show the menu
+if [[ $# -eq 0 ]]; then
+    # Rebuild cache if older than 1 hour or doesn't exist
+    if [[ ! -f "$CACHE_FILE" ]] || [[ $(find "$CACHE_FILE" -mmin +60) ]]; then
+        build_cache
+    fi
+
+    # Output entries for rofi
+    while IFS=$'\t' read -r name exec_cmd icon file; do
+        # rofi format: display name with icon hint
+        if [[ -n "$icon" ]]; then
+            printf '%s\0icon\x1f%s\n' "$name" "$icon"
+        else
+            printf '%s\n' "$name"
+        fi
+    done < "$CACHE_FILE"
+    exit 0
+fi
+
+# ---- selection made ----
+selected="$1"
+
+# Find the Exec command for selected app
+exec_cmd=""
+while IFS=$'\t' read -r name exec icon file; do
+    if [[ "$name" == "$selected" ]]; then
+        exec_cmd="$exec"
+        break
+    fi
+done < "$CACHE_FILE"
+
+if [[ -z "$exec_cmd" ]]; then
+    notify-send "WYD" "Could not find command for: $selected" 2>/dev/null || echo "Error: command not found" >&2
+    exit 1
+fi
+
+# Execute via wydrun, with the app name as alias for display
+export WYDRUN_ALIAS="$selected"
+# Use bash -c to properly handle multi-word exec strings,
+# but set alias so the recorded command is meaningful
+exec "$WYDRUN" bash -c "exec $exec_cmd"
