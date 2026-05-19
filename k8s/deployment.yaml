@@ -29,6 +29,13 @@ spec:
               value: "0.0.0.0:8080"
             - name: RUST_LOG
               value: "wyd_server=info,tower_http=info"
+            - name: WEB_PASSWORD
+              value: "changeme"
+              # TODO: replace with a Kubernetes Secret reference in production
+              # valueFrom:
+              #   secretKeyRef:
+              #     name: wyd-web-auth
+              #     key: password
           volumeMounts:
             - name: data
               mountPath: /app/data

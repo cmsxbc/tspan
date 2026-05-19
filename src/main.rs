@@ -28,7 +28,7 @@ struct Cli {
     #[arg(long, default_value = "admin")]
     web_username: String,
 
-    #[arg(long, default_value = "changeme")]
+    #[arg(long, default_value = "changeme", env = "WEB_PASSWORD")]
     web_password: String,
 }
 
