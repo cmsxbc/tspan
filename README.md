@@ -16,8 +16,11 @@ cargo build --release
 # Import historical records from reference/records/
 ./target/release/wyd-server import ./reference/records/
 
-# Generate an API token
-./target/release/wyd-server token-generate "my-laptop"
+# Generate an API token (for a single agent)
+./target/release/wyd-server token-generate "agent-1"
+
+# Generate a token for a specific client/agent
+./target/release/wyd-server token-generate --client-id agent-2 "agent-2"
 ```
 
 ### Start Server

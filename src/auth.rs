@@ -19,7 +19,7 @@ pub fn extract_bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .and_then(|h| h.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
-pub fn verify_api_token_sync(state: &AppState, token: &str) -> Result<bool, StatusCode> {
+pub fn verify_api_token_sync(state: &AppState, token: &str) -> Result<(bool, String), StatusCode> {
     let mut conn = state.pool.lock().unwrap();
     db::verify_api_token(&mut conn, token).map_err(|e| {
         tracing::error!("DB error: {}", e);
@@ -27,11 +27,11 @@ pub fn verify_api_token_sync(state: &AppState, token: &str) -> Result<bool, Stat
     })
 }
 
-pub async fn check_api_auth(state: &AppState, headers: &axum::http::HeaderMap) -> Result<(), StatusCode> {
+pub async fn check_api_auth(state: &AppState, headers: &axum::http::HeaderMap) -> Result<String, StatusCode> {
     let token = extract_bearer_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
-    let valid = verify_api_token_sync(state, &token)?;
+    let (valid, client_id) = verify_api_token_sync(state, &token)?;
     if valid {
-        Ok(())
+        Ok(client_id)
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }

@@ -29,12 +29,12 @@ pub struct Record {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ApiToken {
     pub token: String,
+    pub client_id: String,
     pub description: Option<String>,
     pub created_at: i64,
 }
 
 pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
-    // WAL mode must be set outside of a transaction
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS clients (
@@ -46,6 +46,7 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
 
         CREATE TABLE IF NOT EXISTS api_tokens (
             token       TEXT PRIMARY KEY,
+            client_id   TEXT NOT NULL DEFAULT 'default',
             description TEXT,
             created_at  INTEGER NOT NULL
         );
@@ -65,8 +66,11 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
 
         CREATE INDEX IF NOT EXISTS idx_records_client ON records(client_id);
         CREATE INDEX IF NOT EXISTS idx_records_start   ON records(start_time);
-        CREATE INDEX IF NOT EXISTS idx_records_end     ON records(end_time);"
-    )?;
+        CREATE INDEX IF NOT EXISTS idx_records_end     ON records(end_time);
+
+        -- Note: if migrating from old schema without client_id,
+        -- manually run: ALTER TABLE api_tokens ADD COLUMN client_id TEXT NOT NULL DEFAULT 'default';
+    ")?;
     Ok(())
 }
 
@@ -104,15 +108,15 @@ pub fn start_session(
     Ok(conn.last_insert_rowid())
 }
 
-pub fn end_session(conn: &mut Connection, id: i64) -> SqlResult<Option<i64>> {
+pub fn end_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlResult<Option<i64>> {
     let now = Utc::now().timestamp();
     let updated = conn.execute(
         "UPDATE records
          SET end_time = ?1,
              duration_seconds = ?1 - start_time,
              status = 'completed'
-         WHERE id = ?2 AND status = 'active'",
-        params![now, id],
+         WHERE id = ?2 AND status = 'active' AND client_id = ?3",
+        params![now, id, client_id],
     )?;
     if updated == 0 {
         return Ok(None);
@@ -125,23 +129,23 @@ pub fn end_session(conn: &mut Connection, id: i64) -> SqlResult<Option<i64>> {
     Ok(Some(duration))
 }
 
-pub fn discard_session(conn: &mut Connection, id: i64) -> SqlResult<bool> {
+pub fn discard_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlResult<bool> {
     let updated = conn.execute(
-        "UPDATE records SET status = 'discarded' WHERE id = ?1 AND status = 'active'",
-        params![id],
+        "UPDATE records SET status = 'discarded' WHERE id = ?1 AND status = 'active' AND client_id = ?2",
+        params![id, client_id],
     )?;
     Ok(updated > 0)
 }
 
-pub fn get_orphaned_sessions(conn: &mut Connection) -> SqlResult<Vec<Record>> {
+pub fn get_orphaned_sessions(conn: &mut Connection, client_id: &str) -> SqlResult<Vec<Record>> {
     let mut stmt = conn.prepare(
         "SELECT id, client_id, start_time, end_time, duration_seconds,
                 command, alias, process_id, status, created_at
          FROM records
-         WHERE status = 'active'
+         WHERE status = 'active' AND client_id = ?1
          ORDER BY start_time DESC"
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([client_id], |row| {
         Ok(Record {
             id: row.get(0)?,
             client_id: row.get(1)?,
@@ -158,34 +162,38 @@ pub fn get_orphaned_sessions(conn: &mut Connection) -> SqlResult<Vec<Record>> {
     rows.collect()
 }
 
-pub fn verify_api_token(conn: &mut Connection, token: &str) -> SqlResult<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM api_tokens WHERE token = ?1",
+pub fn verify_api_token(conn: &mut Connection, token: &str) -> SqlResult<(bool, String)> {
+    let result: Option<String> = conn.query_row(
+        "SELECT client_id FROM api_tokens WHERE token = ?1",
         params![token],
         |row| row.get(0),
-    )?;
-    Ok(count > 0)
+    ).ok();
+    match result {
+        Some(client_id) => Ok((true, client_id)),
+        None => Ok((false, String::new())),
+    }
 }
 
 pub fn list_api_tokens(conn: &mut Connection) -> SqlResult<Vec<ApiToken>> {
     let mut stmt = conn.prepare(
-        "SELECT token, description, created_at FROM api_tokens ORDER BY created_at DESC"
+        "SELECT token, client_id, description, created_at FROM api_tokens ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ApiToken {
             token: row.get(0)?,
-            description: row.get(1)?,
-            created_at: row.get(2)?,
+            client_id: row.get(1)?,
+            description: row.get(2)?,
+            created_at: row.get(3)?,
         })
     })?;
     rows.collect()
 }
 
-pub fn add_api_token(conn: &mut Connection, token: &str, description: Option<&str>) -> SqlResult<()> {
+pub fn add_api_token(conn: &mut Connection, token: &str, client_id: &str, description: Option<&str>) -> SqlResult<()> {
     let now = Utc::now().timestamp();
     conn.execute(
-        "INSERT INTO api_tokens (token, description, created_at) VALUES (?1, ?2, ?3)",
-        params![token, description, now],
+        "INSERT INTO api_tokens (token, client_id, description, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![token, client_id, description, now],
     )?;
     Ok(())
 }

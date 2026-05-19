@@ -7,7 +7,7 @@ pub struct ImportResult {
     pub errors: Vec<String>,
 }
 
-pub async fn import_from_directory(pool: &DbPool, dir: &str) -> anyhow::Result<ImportResult> {
+pub async fn import_from_directory(pool: &DbPool, client_id: &str, dir: &str) -> anyhow::Result<ImportResult> {
     let mut imported = 0;
     let mut failed = 0;
     let mut errors = vec![];
@@ -42,7 +42,6 @@ pub async fn import_from_directory(pool: &DbPool, dir: &str) -> anyhow::Result<I
             continue;
         }
 
-        // Parse start time from filename: YYYYMMDDHHMMSS
         let start_time = match NaiveDateTime::parse_from_str(filename, "%Y%m%d%H%M%S") {
             Ok(dt) => dt.and_utc().timestamp(),
             Err(e) => {
@@ -52,7 +51,6 @@ pub async fn import_from_directory(pool: &DbPool, dir: &str) -> anyhow::Result<I
             }
         };
 
-        // Parse duration from second line
         let duration_seconds: i64 = match lines[1].trim().parse() {
             Ok(v) => v,
             Err(e) => {
@@ -65,7 +63,7 @@ pub async fn import_from_directory(pool: &DbPool, dir: &str) -> anyhow::Result<I
         let end_time = start_time + duration_seconds;
 
         let mut conn = pool.lock().unwrap();
-        if let Err(e) = import_record(&mut conn, "imported", start_time, end_time, duration_seconds) {
+        if let Err(e) = import_record(&mut conn, client_id, start_time, end_time, duration_seconds) {
             failed += 1;
             errors.push(format!("{}: db error {}", filename, e));
         } else {

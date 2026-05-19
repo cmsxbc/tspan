@@ -21,7 +21,7 @@ pub struct AppState {
 
 #[derive(Deserialize)]
 pub struct StartSessionReq {
-    pub client_id: String,
+    pub client_id: Option<String>,
     pub command: Option<String>,
     pub alias: Option<String>,
     pub process_id: Option<i64>,
@@ -83,11 +83,14 @@ async fn api_start_session(
     State(state): State<AppState>,
     Json(req): Json<StartSessionReq>,
 ) -> Result<Json<StartSessionResp>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let token_client_id = check_api_auth(&state, &headers).await?;
+    // Allow explicit client_id override for backward compatibility,
+    // otherwise derive from token
+    let client_id = req.client_id.unwrap_or(token_client_id);
     let mut conn = state.pool.lock().unwrap();
     let id = db::start_session(
         &mut conn,
-        &req.client_id,
+        &client_id,
         req.command.as_deref(),
         req.alias.as_deref(),
         req.process_id,
@@ -108,9 +111,9 @@ async fn api_end_session(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<EndSessionResp>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let duration = db::end_session(&mut conn, id).map_err(|e| {
+    let duration = db::end_session(&mut conn, id, &client_id).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -126,9 +129,9 @@ async fn api_discard_session(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let ok = db::discard_session(&mut conn, id).map_err(|e| {
+    let ok = db::discard_session(&mut conn, id, &client_id).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -144,9 +147,9 @@ async fn api_get_orphaned(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<OrphanedSession>>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let records = db::get_orphaned_sessions(&mut conn).map_err(|e| {
+    let records = db::get_orphaned_sessions(&mut conn, &client_id).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -169,9 +172,9 @@ async fn api_get_stats(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<stats::Stats>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let stats = compute_stats(&mut conn).map_err(|e| {
+    let stats = compute_stats(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -182,14 +185,14 @@ async fn api_get_summary_md(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let stats = compute_stats(&mut conn).map_err(|e| {
+    let stats = compute_stats(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let daily = stats::get_daily_data(&mut conn).map_err(|e| {
+    let daily = stats::get_daily_data(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -210,8 +213,8 @@ async fn api_import(
     State(state): State<AppState>,
     Json(req): Json<ImportReq>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
-    let result = crate::importer::import_from_directory(&state.pool, &req.path).await.map_err(|e| {
+    let client_id = check_api_auth(&state, &headers).await?;
+    let result = crate::importer::import_from_directory(&state.pool, &client_id, &req.path).await.map_err(|e| {
         tracing::error!("Import error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -227,11 +230,11 @@ async fn api_backup(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
-    check_api_auth(&state, &headers).await?;
-    let temp_path = "/tmp/wyd_backup_tmp.db";
+    let client_id = check_api_auth(&state, &headers).await?;
+    let temp_path = format!("/tmp/wyd_backup_{}.db", client_id);
     {
         let conn = state.pool.lock().unwrap();
-        let mut dest = rusqlite::Connection::open(temp_path).map_err(|e| {
+        let mut dest = rusqlite::Connection::open(&temp_path).map_err(|e| {
             tracing::error!("Backup temp db error: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -245,17 +248,17 @@ async fn api_backup(
         })?;
     }
 
-    let data = tokio::fs::read(temp_path).await.map_err(|e| {
+    let data = tokio::fs::read(&temp_path).await.map_err(|e| {
         tracing::error!("Read backup file error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let _ = tokio::fs::remove_file(temp_path).await;
+    let _ = tokio::fs::remove_file(&temp_path).await;
 
     Ok((
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"wyd-backup.db\""),
+            (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"wyd-backup-{}.db\"", client_id)),
         ],
         data,
     ).into_response())
@@ -267,12 +270,13 @@ async fn web_index(
 ) -> Result<Html<String>, StatusCode> {
     check_web_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let stats = compute_stats(&mut conn).map_err(|e| {
+    // Web index shows global stats (all clients aggregated)
+    let stats = compute_stats(&mut conn, "__global__").map_err(|e| {
         tracing::error!("Stats error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let daily = stats::get_daily_data(&mut conn).map_err(|e| {
+    let daily = stats::get_daily_data(&mut conn, "__global__").map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -344,7 +348,7 @@ async fn web_admin(
 ) -> Result<Html<String>, StatusCode> {
     check_web_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let orphaned = db::get_orphaned_sessions(&mut conn).map_err(|e| {
+    let orphaned = db::get_orphaned_sessions(&mut conn, "__global__").map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -488,12 +492,16 @@ async fn api_list_tokens(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<db::ApiToken>>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let tokens = db::list_api_tokens(&mut conn).map_err(|e| {
+    let all_tokens = db::list_api_tokens(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    // Filter to only tokens belonging to this client
+    let tokens: Vec<db::ApiToken> = all_tokens.into_iter()
+        .filter(|t| t.client_id == client_id)
+        .collect();
     Ok(Json(tokens))
 }
 
@@ -502,10 +510,10 @@ async fn api_create_token(
     State(state): State<AppState>,
     Json(req): Json<CreateTokenReq>,
 ) -> Result<Json<CreateTokenResp>, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
     let mut conn = state.pool.lock().unwrap();
-    db::add_api_token(&mut conn, &token, req.description.as_deref()).map_err(|e| {
+    db::add_api_token(&mut conn, &token, &client_id, req.description.as_deref()).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -517,8 +525,17 @@ async fn api_revoke_token(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    check_api_auth(&state, &headers).await?;
+    let client_id = check_api_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
+    // Verify the token belongs to this client before deleting
+    let all_tokens = db::list_api_tokens(&mut conn).map_err(|e| {
+        tracing::error!("DB error: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let owns_token = all_tokens.iter().any(|t| t.token == token && t.client_id == client_id);
+    if !owns_token {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let ok = db::delete_api_token(&mut conn, &token).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR

@@ -2,7 +2,7 @@
 set -e
 
 SERVER_URL="${WYDRUN_SERVER:-http://localhost:8080}"
-CLIENT_ID="${WYDRUN_CLIENT:-$(hostname)}"
+CLIENT_ID="${WYDRUN_CLIENT:-}"
 ALIAS="${WYDRUN_ALIAS:-}"
 TOKEN="${WYDRUN_TOKEN:-}"
 PID=$$
@@ -19,11 +19,17 @@ fi
 
 AUTH_HEADER="Authorization: Bearer $TOKEN"
 
+# Build JSON payload. client_id is optional - if omitted, server derives it from token.
+PAYLOAD='{"command":"'"$*"'","alias":"'"$ALIAS"'","process_id":'"$PID"'}'
+if [[ -n "$CLIENT_ID" ]]; then
+    PAYLOAD='{"client_id":"'"$CLIENT_ID"'","command":"'"$*"'","alias":"'"$ALIAS"'","process_id":'"$PID"'}'
+fi
+
 # Notify server start
 RESPONSE=$(curl -sf -X POST "$SERVER_URL/api/sessions/start" \
   -H "$AUTH_HEADER" \
   -H "Content-Type: application/json" \
-  -d "{\"client_id\":\"$CLIENT_ID\",\"command\":\"$*\",\"alias\":\"$ALIAS\",\"process_id\":$PID}")
+  -d "$PAYLOAD")
 SESSION_ID=$(echo "$RESPONSE" | grep -o '"session_id":[0-9]*' | cut -d: -f2)
 
 # Run user command

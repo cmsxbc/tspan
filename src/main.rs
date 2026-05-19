@@ -40,6 +40,8 @@ enum Commands {
     },
     /// Generate a new API token
     TokenGenerate {
+        #[arg(long, default_value = "default")]
+        client_id: String,
         description: Option<String>,
     },
     /// List all API tokens
@@ -66,18 +68,19 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Commands::Import { path }) => {
             println!("Importing from {}...", path);
-            let result = importer::import_from_directory(&pool, &path).await?;
+            let result = importer::import_from_directory(&pool, "imported", &path).await?;
             println!("Imported: {}, Failed: {}", result.imported, result.failed);
             for err in &result.errors {
                 eprintln!("  ERROR: {}", err);
             }
             Ok(())
         }
-        Some(Commands::TokenGenerate { description }) => {
+        Some(Commands::TokenGenerate { client_id, description }) => {
             let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
             let mut conn = pool.lock().unwrap();
-            db::add_api_token(&mut conn, &token, description.as_deref())?;
+            db::add_api_token(&mut conn, &token, &client_id, description.as_deref())?;
             println!("Generated token: {}", token);
+            println!("Client ID: {}", client_id);
             Ok(())
         }
         Some(Commands::TokenList) => {
@@ -105,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
                 let tokens = db::list_api_tokens(&mut conn)?;
                 if tokens.is_empty() {
                     let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-                    db::add_api_token(&mut conn, &token, Some("auto-generated initial token"))?;
+                    db::add_api_token(&mut conn, &token, "default", Some("auto-generated initial token"))?;
                     println!("WARNING: No API tokens found. Auto-generated initial token: {}", token);
                     println!("Set WYDRUN_TOKEN environment variable to this value.");
                 }

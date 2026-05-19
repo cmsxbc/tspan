@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -75,18 +75,31 @@ pub fn calc_ratio(value: i64, total: i64) -> f64 {
     (value as f64 * 100.0) / total as f64
 }
 
-pub fn compute_stats(conn: &mut Connection) -> anyhow::Result<Stats> {
-    let today = Utc::now().timestamp();
+fn client_filter(client_id: &str) -> &'static str {
+    if client_id == "__global__" {
+        ""
+    } else {
+        " AND client_id = ?1"
+    }
+}
 
-    // Total completed records
-    let (total_seconds, total_times, earliest_start): (i64, i64, Option<i64>) = conn.query_row(
-        "SELECT COALESCE(SUM(duration_seconds), 0),
-                COUNT(*),
-                MIN(start_time)
-         FROM records WHERE status = 'completed'",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
+pub fn compute_stats(conn: &mut Connection, client_id: &str) -> anyhow::Result<Stats> {
+    let today = Utc::now().timestamp();
+    let filter = client_filter(client_id);
+
+    let (total_seconds, total_times, earliest_start): (i64, i64, Option<i64>) = if client_id == "__global__" {
+        conn.query_row(
+            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE status = 'completed'{}", filter),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?
+    } else {
+        conn.query_row(
+            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE status = 'completed'{}", filter),
+            [client_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?
+    };
 
     let earliest_start = earliest_start.unwrap_or(today);
     let total_duration = today - earliest_start;
@@ -112,7 +125,6 @@ pub fn compute_stats(conn: &mut Connection) -> anyhow::Result<Stats> {
         mean_usage_hr: human_readable_time(mean_usage),
     };
 
-    // Past N stats
     let past_n_names = vec![
         ("1 week", 7 * 86400),
         ("2 weeks", 14 * 86400),
@@ -125,12 +137,19 @@ pub fn compute_stats(conn: &mut Connection) -> anyhow::Result<Stats> {
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
         let start = today - secs;
-        let (seconds, times): (i64, i64) = conn.query_row(
-            "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*)
-             FROM records WHERE status = 'completed' AND start_time > ?1",
-            [start],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let (seconds, times): (i64, i64) = if client_id == "__global__" {
+            conn.query_row(
+                "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE status = 'completed' AND start_time > ?1",
+                params![start],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE status = 'completed' AND client_id = ?1 AND start_time > ?2",
+                params![client_id, start],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
         let mean = if times > 0 { seconds / times } else { 0 };
         let ratio = calc_ratio(seconds, secs);
         let day_ratio = calc_ratio(times, (secs / 86400).max(1));
@@ -144,11 +163,17 @@ pub fn compute_stats(conn: &mut Connection) -> anyhow::Result<Stats> {
         });
     }
 
-    // Interval stats
-    let mut stmt = conn.prepare(
-        "SELECT start_time FROM records WHERE status = 'completed' ORDER BY start_time ASC"
-    )?;
-    let starts: Vec<i64> = stmt.query_map([], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
+    let starts: Vec<i64> = {
+        if client_id == "__global__" {
+            let mut stmt = conn.prepare("SELECT start_time FROM records WHERE status = 'completed' ORDER BY start_time ASC")?;
+            let rows = stmt.query_map([], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        } else {
+            let mut stmt = conn.prepare("SELECT start_time FROM records WHERE status = 'completed' AND client_id = ?1 ORDER BY start_time ASC")?;
+            let rows = stmt.query_map([client_id], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        }
+    };
 
     let current_interval = if let Some(last) = starts.last() {
         (today - last) / 86400
@@ -175,16 +200,30 @@ pub fn compute_stats(conn: &mut Connection) -> anyhow::Result<Stats> {
     Ok(Stats { total, past_n, interval })
 }
 
-pub fn get_daily_data(conn: &mut Connection) -> anyhow::Result<Vec<(String, i64)>> {
-    let mut stmt = conn.prepare(
-        "SELECT date(start_time, 'unixepoch', 'localtime') as day,
-                COALESCE(SUM(duration_seconds), 0)
-         FROM records WHERE status = 'completed'
-         GROUP BY day
-         ORDER BY day ASC"
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-    })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+pub fn get_daily_data(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<(String, i64)>> {
+    if client_id == "__global__" {
+        let mut stmt = conn.prepare(
+            "SELECT date(start_time, 'unixepoch', 'localtime') as day,
+                    COALESCE(SUM(duration_seconds), 0)
+             FROM records WHERE status = 'completed'
+             GROUP BY day
+             ORDER BY day ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT date(start_time, 'unixepoch', 'localtime') as day,
+                    COALESCE(SUM(duration_seconds), 0)
+             FROM records WHERE status = 'completed' AND client_id = ?1
+             GROUP BY day
+             ORDER BY day ASC"
+        )?;
+        let rows = stmt.query_map([client_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
 }
