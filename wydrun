@@ -1,0 +1,37 @@
+#!/bin/bash
+set -e
+
+SERVER_URL="${WYDRUN_SERVER:-http://localhost:8080}"
+CLIENT_ID="${WYDRUN_CLIENT:-$(hostname)}"
+ALIAS="${WYDRUN_ALIAS:-}"
+TOKEN="${WYDRUN_TOKEN:-}"
+PID=$$
+
+if [[ -z "$TOKEN" ]]; then
+    echo "Error: WYDRUN_TOKEN is not set" >&2
+    exit 1
+fi
+
+# If command is long and no alias set, truncate for display
+if [[ -z "$ALIAS" && "${#*}" -gt 50 ]]; then
+    ALIAS="${*:0:50}..."
+fi
+
+AUTH_HEADER="Authorization: Bearer $TOKEN"
+
+# Notify server start
+RESPONSE=$(curl -sf -X POST "$SERVER_URL/api/sessions/start" \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  -d "{\"client_id\":\"$CLIENT_ID\",\"command\":\"$*\",\"alias\":\"$ALIAS\",\"process_id\":$PID}")
+SESSION_ID=$(echo "$RESPONSE" | grep -o '"session_id":[0-9]*' | cut -d: -f2)
+
+# Run user command
+"$@"
+EXIT_CODE=$?
+
+# Notify server end (ignore errors)
+curl -sf -X POST "$SERVER_URL/api/sessions/$SESSION_ID/end" \
+  -H "$AUTH_HEADER" > /dev/null 2>&1 || true
+
+exit $EXIT_CODE

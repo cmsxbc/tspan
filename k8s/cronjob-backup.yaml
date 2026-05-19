@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wyd-backup
+  namespace: wyd-system
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: backup
+              image: busybox:stable
+              env:
+                - name: WEB_USER
+                  value: "admin"
+                - name: WEB_PASS
+                  value: "changeme"
+                  # TODO: replace with a Kubernetes Secret reference in production
+                  # valueFrom:
+                  #   secretKeyRef:
+                  #     name: wyd-web-auth
+                  #     key: password
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  TOKEN=$(wget -qO- --header="Authorization: Basic $(echo -n "$WEB_USER:$WEB_PASS" | base64)" \
+                    http://wyd-server.wyd-system.svc.cluster.local/api/admin/tokens | head -1 | cut -d' ' -f1)
+                  wget -q --header="Authorization: Bearer $TOKEN" \
+                    -O /backup/wyd-backup-$(date +%Y%m%d-%H%M%S).db \
+                    http://wyd-server.wyd-system.svc.cluster.local/api/admin/backup
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              emptyDir: {}
+          restartPolicy: OnFailure

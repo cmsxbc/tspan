@@ -1,0 +1,33 @@
+# 原项目及历史记录（保持新仓库纯净）
+reference/
+
+# SQLite 数据库及备份
+data.db
+data.db-shm
+data.db-wal
+*.db
+*_backup.db
+
+# Rust 构建产物
+/target/
+Cargo.lock
+
+# 本地配置文件
+wyd-server.local.toml
+*.local.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+# Added by cargo
+
+/target
