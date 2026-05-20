@@ -656,12 +656,12 @@ async function loadRecords() {
   const r = await fetch('/api/records?' + params.toString());
   if(!r.ok) { document.getElementById('records-table').innerHTML = '<p>Error: ' + r.status + '</p>'; return; }
   const data = await r.json();
-  let html = '<table><tr><th>ID</th><th>Client</th><th>Alias</th><th>Command</th><th>Start</th><th>End</th><th>Duration</th></tr>';
+  let html = '<table><tr><th>ID</th><th>Client</th><th>Alias</th><th>Command</th><th>Start</th><th>End</th><th class="col-dur">Duration</th></tr>';
   if(data.records.length===0) {
     html += '<tr><td colspan="7" style="text-align:center;color:#666;">No records</td></tr>';
   } else {
     data.records.forEach(rec => {
-      html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td>' + fmtDur(rec.duration_seconds) + '</td></tr>';
+      html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td></tr>';
     });
   }
   html += '</table>';
