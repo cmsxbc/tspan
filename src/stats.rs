@@ -43,7 +43,7 @@ pub struct Stats {
 
 pub fn human_readable_time(seconds: i64) -> String {
     if seconds <= 0 {
-        return "0 seconds".to_string();
+        return "0 s".to_string();
     }
     let mut parts = vec![];
     let mut rem = seconds;
@@ -54,16 +54,16 @@ pub fn human_readable_time(seconds: i64) -> String {
     let mins = rem / 60;
     rem %= 60;
     if days > 0 {
-        parts.push(format!("{} days", days));
+        parts.push(format!("{} d", days));
     }
     if hours > 0 {
-        parts.push(format!("{} hours", hours));
+        parts.push(format!("{} h", hours));
     }
     if mins > 0 {
-        parts.push(format!("{} minutes", mins));
+        parts.push(format!("{} m", mins));
     }
     if rem > 0 {
-        parts.push(format!("{} seconds", rem));
+        parts.push(format!("{} s", rem));
     }
     parts.join(" ")
 }

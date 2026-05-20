@@ -447,6 +447,7 @@ h1,h2{margin-top:0}
 table{width:100%;border-collapse:collapse;margin-top:10px}
 th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #eee}
 th{font-size:12px;color:#666;font-weight:600}
+.col-dur{white-space:nowrap;min-width:90px;text-align:right;font-variant-numeric:tabular-nums}
 .nav{margin-bottom:20px}
 .nav a{color:#0969da;text-decoration:none;margin-right:15px}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;align-items:center;}
@@ -474,10 +475,10 @@ th{font-size:12px;color:#666;font-weight:600}
   </div>
 </div>
 <div id="stats-cards" class="stats-grid"></div>
+<div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
-<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th>Seconds</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th>Mean</th></tr></thead><tbody></tbody></table></div>
-<div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
+<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card"><h2>Stats by Client</h2><div id="client-stats"></div></div>
 <div class="card"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
 <div class="card"><h2>Stats by Command</h2><div id="command-stats"></div></div>
@@ -547,9 +548,11 @@ function fmtDate(ts) {
 function fmtDur(s) {
   if(s==null) return '-';
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
-  if(h>0) return h+'h '+m+'m '+sec+'s';
-  if(m>0) return m+'m '+sec+'s';
-  return sec+'s';
+  let out='';
+  if(h>0) out+=h+' h ';
+  if(m>0) out+=m+' m ';
+  if(sec>0 || out==='') out+=sec+' s';
+  return out.trim();
 }
 async function loadStats() {
   const r = await fetch('/api/stats?' + buildParams({}).toString());
@@ -562,7 +565,7 @@ async function loadStats() {
     '<div class="stat-card"><div class="stat-value">' + s.total.mean_usage_hr + '</div><div class="stat-label">Mean / Session</div></div>';
   let html = '';
   s.past_n.forEach(p => {
-    html += '<tr><td>' + p.name + '</td><td>' + p.seconds + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td>' + p.mean_usage + 's</td></tr>';
+    html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td class="col-dur">' + fmtDur(p.mean_usage) + '</td></tr>';
   });
   document.querySelector('#past-n-table tbody').innerHTML = html;
   const maxInt = s.interval.max_interval || 1;
