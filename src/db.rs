@@ -137,6 +137,31 @@ pub fn discard_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlRe
     Ok(updated > 0)
 }
 
+pub fn end_session_admin(conn: &mut Connection, id: i64) -> SqlResult<Option<i64>> {
+    let now = Utc::now().timestamp();
+    let updated = conn.execute(
+        "UPDATE records SET end_time = ?1, duration_seconds = ?1 - start_time, status = 'completed' WHERE id = ?2 AND status = 'active'",
+        params![now, id],
+    )?;
+    if updated == 0 {
+        return Ok(None);
+    }
+    let duration: i64 = conn.query_row(
+        "SELECT duration_seconds FROM records WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(Some(duration))
+}
+
+pub fn discard_session_admin(conn: &mut Connection, id: i64) -> SqlResult<bool> {
+    let updated = conn.execute(
+        "UPDATE records SET status = 'discarded' WHERE id = ?1 AND status = 'active'",
+        params![id],
+    )?;
+    Ok(updated > 0)
+}
+
 pub fn get_orphaned_sessions(conn: &mut Connection, client_id: &str) -> SqlResult<Vec<Record>> {
     let mut stmt = conn.prepare(
         "SELECT id, client_id, start_time, end_time, duration_seconds,
@@ -160,6 +185,112 @@ pub fn get_orphaned_sessions(conn: &mut Connection, client_id: &str) -> SqlResul
         })
     })?;
     rows.collect()
+}
+
+pub fn get_orphaned_sessions_admin(conn: &mut Connection) -> SqlResult<Vec<Record>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, client_id, start_time, end_time, duration_seconds,
+                command, alias, process_id, status, created_at
+         FROM records
+         WHERE status = 'active'
+         ORDER BY start_time DESC"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Record {
+            id: row.get(0)?,
+            client_id: row.get(1)?,
+            start_time: row.get(2)?,
+            end_time: row.get(3)?,
+            duration_seconds: row.get(4)?,
+            command: row.get(5)?,
+            alias: row.get(6)?,
+            process_id: row.get(7)?,
+            status: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn record_from_row(row: &rusqlite::Row) -> SqlResult<Record> {
+    Ok(Record {
+        id: row.get(0)?,
+        client_id: row.get(1)?,
+        start_time: row.get(2)?,
+        end_time: row.get(3)?,
+        duration_seconds: row.get(4)?,
+        command: row.get(5)?,
+        alias: row.get(6)?,
+        process_id: row.get(7)?,
+        status: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
+pub fn distinct_client_ids(conn: &mut Connection) -> SqlResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT client_id FROM records ORDER BY client_id")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+pub fn list_records_page(
+    conn: &mut Connection,
+    client_id: &str,
+    alias_filter: &str,
+    command_filter: &str,
+    page: i64,
+    per_page: i64,
+) -> SqlResult<(Vec<Record>, i64)> {
+    let offset = (page - 1) * per_page;
+    let mut conditions = vec!["status != 'active'"];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    let alias_like;
+    let command_like;
+
+    if !client_id.is_empty() && client_id != "__global__" {
+        conditions.push("client_id = ?");
+        param_refs.push(&client_id);
+    }
+    if !alias_filter.is_empty() {
+        conditions.push("alias LIKE ?");
+        alias_like = format!("%{}%", alias_filter);
+        param_refs.push(&alias_like);
+    }
+    if !command_filter.is_empty() {
+        conditions.push("command LIKE ?");
+        command_like = format!("%{}%", command_filter);
+        param_refs.push(&command_like);
+    }
+
+    let where_clause = conditions.join(" AND ");
+
+    let count_sql = format!("SELECT COUNT(*) FROM records WHERE {}", where_clause);
+    let total: i64 = conn.query_row(
+        &count_sql,
+        rusqlite::params_from_iter(&param_refs),
+        |row| row.get(0),
+    )?;
+
+    let mut select_params = param_refs.clone();
+    select_params.push(&per_page);
+    select_params.push(&offset);
+
+    let select_sql = format!(
+        "SELECT id, client_id, start_time, end_time, duration_seconds,
+                command, alias, process_id, status, created_at
+         FROM records
+         WHERE {}
+         ORDER BY start_time DESC
+         LIMIT ? OFFSET ?",
+        where_clause
+    );
+    let mut stmt = conn.prepare(&select_sql)?;
+    let records: Vec<Record> = stmt.query_map(
+        rusqlite::params_from_iter(&select_params),
+        record_from_row,
+    )?.collect::<SqlResult<Vec<_>>>()?;
+
+    Ok((records, total))
 }
 
 pub fn verify_api_token(conn: &mut Connection, token: &str) -> SqlResult<(bool, String)> {

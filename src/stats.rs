@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -75,31 +75,32 @@ pub fn calc_ratio(value: i64, total: i64) -> f64 {
     (value as f64 * 100.0) / total as f64
 }
 
-fn client_filter(client_id: &str) -> &'static str {
-    if client_id == "__global__" {
-        ""
-    } else {
-        " AND client_id = ?1"
-    }
-}
-
-pub fn compute_stats(conn: &mut Connection, client_id: &str) -> anyhow::Result<Stats> {
+pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, command: &str) -> anyhow::Result<Stats> {
     let today = Utc::now().timestamp();
-    let filter = client_filter(client_id);
 
-    let (total_seconds, total_times, earliest_start): (i64, i64, Option<i64>) = if client_id == "__global__" {
-        conn.query_row(
-            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE status = 'completed'{}", filter),
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?
-    } else {
-        conn.query_row(
-            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE status = 'completed'{}", filter),
-            [client_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?
-    };
+    let mut conditions = vec!["status = 'completed'".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let (total_seconds, total_times, earliest_start): (i64, i64, Option<i64>) = conn.query_row(
+        &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE {}", wc),
+        rusqlite::params_from_iter(&param_refs),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
 
     let earliest_start = earliest_start.unwrap_or(today);
     let total_duration = today - earliest_start;
@@ -137,19 +138,16 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str) -> anyhow::Result<S
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
         let start = today - secs;
-        let (seconds, times): (i64, i64) = if client_id == "__global__" {
-            conn.query_row(
-                "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE status = 'completed' AND start_time > ?1",
-                params![start],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?
-        } else {
-            conn.query_row(
-                "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE status = 'completed' AND client_id = ?1 AND start_time > ?2",
-                params![client_id, start],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?
-        };
+        let mut c2 = conditions.clone();
+        c2.push("start_time > ?".to_string());
+        let mut p2 = param_refs.clone();
+        p2.push(&start);
+        let wc2 = c2.join(" AND ");
+        let (seconds, times): (i64, i64) = conn.query_row(
+            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE {}", wc2),
+            rusqlite::params_from_iter(&p2),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         let mean = if times > 0 { seconds / times } else { 0 };
         let ratio = calc_ratio(seconds, secs);
         let day_ratio = calc_ratio(times, (secs / 86400).max(1));
@@ -163,17 +161,15 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str) -> anyhow::Result<S
         });
     }
 
-    let starts: Vec<i64> = {
-        if client_id == "__global__" {
-            let mut stmt = conn.prepare("SELECT start_time FROM records WHERE status = 'completed' ORDER BY start_time ASC")?;
-            let rows = stmt.query_map([], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
-            rows
-        } else {
-            let mut stmt = conn.prepare("SELECT start_time FROM records WHERE status = 'completed' AND client_id = ?1 ORDER BY start_time ASC")?;
-            let rows = stmt.query_map([client_id], |row| row.get(0))?.collect::<Result<Vec<_>, _>>()?;
-            rows
-        }
-    };
+    let wc_start = conditions.join(" AND ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT start_time FROM records WHERE {} ORDER BY start_time ASC",
+        wc_start
+    ))?;
+    let starts: Vec<i64> = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| row.get(0),
+    )?.collect::<Result<Vec<_>, _>>()?;
 
     let current_interval = if let Some(last) = starts.last() {
         (today - last) / 86400
@@ -200,30 +196,204 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str) -> anyhow::Result<S
     Ok(Stats { total, past_n, interval })
 }
 
-pub fn get_daily_data(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<(String, i64)>> {
-    if client_id == "__global__" {
-        let mut stmt = conn.prepare(
-            "SELECT date(start_time, 'unixepoch', 'localtime') as day,
-                    COALESCE(SUM(duration_seconds), 0)
-             FROM records WHERE status = 'completed'
-             GROUP BY day
-             ORDER BY day ASC"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?.collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+#[derive(Debug, Serialize)]
+pub struct ClientStat {
+    pub client_id: String,
+    pub total_seconds: i64,
+    pub total_times: i64,
+    pub mean_seconds: i64,
+    pub total_seconds_hr: String,
+    pub mean_seconds_hr: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AliasStat {
+    pub alias: String,
+    pub total_seconds: i64,
+    pub total_times: i64,
+    pub mean_seconds: i64,
+    pub total_seconds_hr: String,
+    pub mean_seconds_hr: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CommandStat {
+    pub command: String,
+    pub total_seconds: i64,
+    pub total_times: i64,
+    pub mean_seconds: i64,
+    pub total_seconds_hr: String,
+    pub mean_seconds_hr: String,
+}
+
+pub fn compute_stats_by_client(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<ClientStat>> {
+    let is_global = client_id == "__global__";
+    let sql = if is_global {
+        "SELECT client_id, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed'
+         GROUP BY client_id
+         ORDER BY 2 DESC"
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT date(start_time, 'unixepoch', 'localtime') as day,
-                    COALESCE(SUM(duration_seconds), 0)
-             FROM records WHERE status = 'completed' AND client_id = ?1
-             GROUP BY day
-             ORDER BY day ASC"
-        )?;
-        let rows = stmt.query_map([client_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?.collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        "SELECT client_id, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed' AND client_id = ?1
+         GROUP BY client_id
+         ORDER BY total_seconds DESC"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if is_global {
+        stmt.query_map([], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(ClientStat {
+                client_id: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([client_id], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(ClientStat {
+                client_id: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    };
+    Ok(rows)
+}
+
+pub fn compute_stats_by_alias(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<AliasStat>> {
+    let is_global = client_id == "__global__";
+    let sql = if is_global {
+        "SELECT alias, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed' AND alias IS NOT NULL AND alias != ''
+         GROUP BY alias
+         ORDER BY 2 DESC"
+    } else {
+        "SELECT alias, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed' AND client_id = ?1 AND alias IS NOT NULL AND alias != ''
+         GROUP BY alias
+         ORDER BY total_seconds DESC"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if is_global {
+        stmt.query_map([], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(AliasStat {
+                alias: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([client_id], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(AliasStat {
+                alias: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    };
+    Ok(rows)
+}
+
+pub fn compute_stats_by_command(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<CommandStat>> {
+    let is_global = client_id == "__global__";
+    let sql = if is_global {
+        "SELECT command, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed' AND command IS NOT NULL AND command != ''
+         GROUP BY command
+         ORDER BY 2 DESC"
+    } else {
+        "SELECT command, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE status = 'completed' AND client_id = ?1 AND command IS NOT NULL AND command != ''
+         GROUP BY command
+         ORDER BY total_seconds DESC"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if is_global {
+        stmt.query_map([], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(CommandStat {
+                command: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([client_id], |row| {
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok(CommandStat {
+                command: row.get(0)?,
+                total_seconds,
+                total_times,
+                mean_seconds: mean,
+                total_seconds_hr: human_readable_time(total_seconds),
+                mean_seconds_hr: human_readable_time(mean),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?
+    };
+    Ok(rows)
+}
+
+pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, command: &str) -> anyhow::Result<Vec<(String, i64)>> {
+    let mut conditions = vec!["status = 'completed'".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
     }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT date(start_time, 'unixepoch', 'localtime') as day,
+                COALESCE(SUM(duration_seconds), 0)
+         FROM records WHERE {}
+         GROUP BY day
+         ORDER BY day ASC",
+        wc
+    ))?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    )?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }

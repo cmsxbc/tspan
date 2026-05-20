@@ -36,6 +36,8 @@ struct Cli {
 enum Commands {
     /// Import historical records from a directory
     Import {
+        #[arg(long, default_value = "imported")]
+        client_id: String,
         path: String,
     },
     /// Generate a new API token
@@ -66,9 +68,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::create_pool(&cli.database)?;
 
     match cli.command {
-        Some(Commands::Import { path }) => {
-            println!("Importing from {}...", path);
-            let result = importer::import_from_directory(&pool, "imported", &path).await?;
+        Some(Commands::Import { client_id, path }) => {
+            println!("Importing from {} as client '{}'...", path, client_id);
+            let result = importer::import_from_directory(&pool, &client_id, &path).await?;
             println!("Imported: {}, Failed: {}", result.imported, result.failed);
             for err in &result.errors {
                 eprintln!("  ERROR: {}", err);
@@ -123,7 +125,16 @@ async fn main() -> anyhow::Result<()> {
             let app = server::create_router(state);
 
             let listener = tokio::net::TcpListener::bind(&cli.bind).await?;
+            let access_url = if cli.bind.starts_with("0.0.0.0:") {
+                cli.bind.replacen("0.0.0.0", "127.0.0.1", 1)
+            } else if cli.bind.starts_with("[::]:") {
+                cli.bind.replacen("[::]", "[::1]", 1)
+            } else {
+                cli.bind.clone()
+            };
             println!("Server listening on http://{}", cli.bind);
+            println!("  → Web UI: http://{}/", access_url);
+            println!("  → Admin:  http://{}/admin", access_url);
             axum::serve(listener, app).await?;
             Ok(())
         }

@@ -1,8 +1,8 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,60 @@ pub struct OrphanedSession {
 #[derive(Deserialize)]
 pub struct ImportReq {
     pub path: String,
+    pub client_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FilterQuery {
+    pub client_id: Option<String>,
+    pub alias: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SvgResp {
+    pub all_time: String,
+    pub years: Vec<(String, String)>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateTokenReq {
+    pub client_id: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CreateTokenResp {
+    pub token: String,
+}
+
+#[derive(Deserialize)]
+pub struct ListRecordsQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub client_id: Option<String>,
+    pub alias: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RecordPageItem {
+    pub id: i64,
+    pub client_id: String,
+    pub alias: Option<String>,
+    pub command: Option<String>,
+    pub start_time: i64,
+    pub end_time: Option<i64>,
+    pub duration_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct RecordsPageResp {
+    pub records: Vec<RecordPageItem>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+    pub total_pages: i64,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -62,11 +116,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/sessions/:id/discard", post(api_discard_session))
         .route("/sessions/orphaned", get(api_get_orphaned))
         .route("/stats", get(api_get_stats))
+        .route("/stats/by-client", get(api_get_stats_by_client))
+        .route("/stats/by-alias", get(api_get_stats_by_alias))
+        .route("/stats/by-command", get(api_get_stats_by_command))
         .route("/stats/summary.md", get(api_get_summary_md))
+        .route("/daily-data", get(api_get_daily_data))
+        .route("/svg", get(api_get_svg))
+        .route("/records", get(api_list_records))
+        .route("/clients", get(api_list_clients))
+        .route("/aliases", get(api_get_aliases))
         .route("/admin/import", post(api_import))
         .route("/admin/backup", get(api_backup))
         .route("/admin/tokens", get(api_list_tokens).post(api_create_token))
-        .route("/admin/tokens/:token", post(api_revoke_token));
+        .route("/admin/tokens/:token", delete(api_revoke_token));
 
     let web_routes = Router::new()
         .route("/", get(web_index))
@@ -78,14 +140,35 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Try API Bearer auth first; fall back to Web Basic auth as admin.
+/// Returns (is_admin, client_id).
+async fn resolve_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(bool, String), Response> {
+    if let Ok(client_id) = check_api_auth(state, headers).await {
+        Ok((false, client_id))
+    } else if check_web_auth(state, headers).await.is_ok() {
+        Ok((true, "__global__".to_string()))
+    } else {
+        Err(unauthorized_web_response())
+    }
+}
+
+fn unauthorized_web_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"wyd-admin\"")],
+        "Unauthorized",
+    ).into_response()
+}
+
 async fn api_start_session(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<StartSessionReq>,
 ) -> Result<Json<StartSessionResp>, StatusCode> {
     let token_client_id = check_api_auth(&state, &headers).await?;
-    // Allow explicit client_id override for backward compatibility,
-    // otherwise derive from token
     let client_id = req.client_id.unwrap_or(token_client_id);
     let mut conn = state.pool.lock().unwrap();
     let id = db::start_session(
@@ -110,17 +193,21 @@ async fn api_end_session(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<Json<EndSessionResp>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<EndSessionResp>, Response> {
+    let (is_admin, client_id) = resolve_auth(&state, &headers).await?;
     let mut conn = state.pool.lock().unwrap();
-    let duration = db::end_session(&mut conn, id, &client_id).map_err(|e| {
+    let duration = if is_admin {
+        db::end_session_admin(&mut conn, id)
+    } else {
+        db::end_session(&mut conn, id, &client_id)
+    }.map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     match duration {
         Some(d) => Ok(Json(EndSessionResp { session_id: id, duration_seconds: d })),
-        None => Err(StatusCode::NOT_FOUND),
+        None => Err((StatusCode::NOT_FOUND, "Not Found").into_response()),
     }
 }
 
@@ -128,30 +215,34 @@ async fn api_discard_session(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<StatusCode, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<StatusCode, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
     let mut conn = state.pool.lock().unwrap();
-    let ok = db::discard_session(&mut conn, id, &client_id).map_err(|e| {
+    let ok = db::discard_session_admin(&mut conn, id).map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     if ok {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err((StatusCode::NOT_FOUND, "Not Found").into_response())
     }
 }
 
 async fn api_get_orphaned(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Json<Vec<OrphanedSession>>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<Vec<OrphanedSession>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
     let mut conn = state.pool.lock().unwrap();
-    let records = db::get_orphaned_sessions(&mut conn, &client_id).map_err(|e| {
+    let records = db::get_orphaned_sessions_admin(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     let now = chrono::Utc::now().timestamp();
@@ -169,32 +260,95 @@ async fn api_get_orphaned(
 }
 
 async fn api_get_stats(
+    Query(q): Query<FilterQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Json<stats::Stats>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<stats::Stats>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
     let mut conn = state.pool.lock().unwrap();
-    let stats = compute_stats(&mut conn, &client_id).map_err(|e| {
+    let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Stats error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
     Ok(Json(stats))
 }
 
-async fn api_get_summary_md(
+async fn api_get_stats_by_client(
+    Query(q): Query<FilterQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<Vec<stats::ClientStat>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let mut conn = state.pool.lock().unwrap();
-    let stats = compute_stats(&mut conn, &client_id).map_err(|e| {
+    let data = stats::compute_stats_by_client(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Stats error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
+async fn api_get_stats_by_alias(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<stats::AliasStat>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_stats_by_alias(&mut conn, &client_id).map_err(|e| {
+        tracing::error!("Stats error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
+async fn api_get_stats_by_command(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<stats::CommandStat>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_stats_by_command(&mut conn, &client_id).map_err(|e| {
+        tracing::error!("Stats error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
+async fn api_get_summary_md(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Response, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Stats error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
-    let daily = stats::get_daily_data(&mut conn, &client_id).map_err(|e| {
+    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     let all_svg = generate_svg_calendar(&daily, None);
@@ -212,11 +366,14 @@ async fn api_import(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<ImportReq>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<serde_json::Value>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = req.client_id.unwrap_or_else(|| "default".to_string());
     let result = crate::importer::import_from_directory(&state.pool, &client_id, &req.path).await.map_err(|e| {
         tracing::error!("Import error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     Ok(Json(serde_json::json!({
@@ -229,28 +386,30 @@ async fn api_import(
 async fn api_backup(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Response, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
-    let temp_path = format!("/tmp/wyd_backup_{}.db", client_id);
+) -> Result<Response, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let temp_path = format!("/tmp/wyd_backup_{}.db", chrono::Utc::now().timestamp());
     {
         let conn = state.pool.lock().unwrap();
         let mut dest = rusqlite::Connection::open(&temp_path).map_err(|e| {
             tracing::error!("Backup temp db error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         })?;
         let backup = rusqlite::backup::Backup::new(&*conn, &mut dest).map_err(|e| {
             tracing::error!("Backup init error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         })?;
         backup.run_to_completion(5, std::time::Duration::from_millis(100), None).map_err(|e| {
             tracing::error!("Backup run error: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         })?;
     }
 
     let data = tokio::fs::read(&temp_path).await.map_err(|e| {
         tracing::error!("Read backup file error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
     let _ = tokio::fs::remove_file(&temp_path).await;
@@ -258,50 +417,13 @@ async fn api_backup(
     Ok((
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"wyd-backup-{}.db\"", client_id)),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"wyd-backup.db\""),
         ],
         data,
     ).into_response())
 }
 
-fn unauthorized_web_response() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Basic realm=\"wyd-admin\"")],
-        "Unauthorized",
-    ).into_response()
-}
-
-async fn web_index(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> Result<Html<String>, Response> {
-    if check_web_auth(&state, &headers).await.is_err() {
-        return Err(unauthorized_web_response());
-    }
-    let mut conn = state.pool.lock().unwrap();
-    // Web index shows global stats (all clients aggregated)
-    let stats = match compute_stats(&mut conn, "__global__") {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Stats error: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
-        }
-    };
-
-    let daily = match stats::get_daily_data(&mut conn, "__global__") {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("Daily data error: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
-        }
-    };
-
-    let all_svg = generate_svg_calendar(&daily, None);
-    let year_svgs = generate_all_years_svgs(&daily);
-
-    let mut html = String::new();
-    html.push_str(r#"<!DOCTYPE html>
+const INDEX_HTML: &str = r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>WYD Stats</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#333;background:#f6f8fa}
@@ -316,46 +438,229 @@ th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #eee}
 th{font-size:12px;color:#666;font-weight:600}
 .nav{margin-bottom:20px}
 .nav a{color:#0969da;text-decoration:none;margin-right:15px}
-</style></head><body>"#);
-
-    html.push_str(r#"<div class="nav"><a href="/">Home</a><a href="/admin">Admin</a></div>"#);
-    html.push_str("<h1>Activity Stats</h1>");
-
-    html.push_str(r#"<div class="stats-grid">"#);
-    html.push_str(&format!(r#"<div class="stat-card"><div class="stat-value">{}</div><div class="stat-label">Total Days</div></div>"#, stats.total.total_days));
-    html.push_str(&format!(r#"<div class="stat-card"><div class="stat-value">{}</div><div class="stat-label">Total Times</div></div>"#, stats.total.total_times));
-    html.push_str(&format!(r#"<div class="stat-card"><div class="stat-value">{}</div><div class="stat-label">Total Duration</div></div>"#, stats.total.total_seconds_hr));
-    html.push_str(&format!(r#"<div class="stat-card"><div class="stat-value">{}</div><div class="stat-label">Mean / Session</div></div>"#, stats.total.mean_usage_hr));
-    html.push_str("</div>");
-
-    html.push_str(r#"<div class="card"><h2>Activity Graph (All Time)</h2>"#);
-    html.push_str(&all_svg);
-    html.push_str("</div>");
-
-    for (year, svg) in year_svgs {
-        html.push_str(&format!(r#"<div class="card"><h2>{}</h2>"#, year));
-        html.push_str(&svg);
-        html.push_str("</div>");
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;align-items:center;}
+.filters select,.filters input{padding:6px 10px;border-radius:4px;border:1px solid #d0d7de;}
+.btn{padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-right:5px}
+.btn-gen{background:#0969da;color:#fff}
+.code{font-family:monospace;background:#f6f8fa;padding:2px 6px;border-radius:3px;font-size:12px}
+#svg-all-time{margin-top:10px}
+.year-svg{margin-top:10px}
+</style></head><body>
+<div class="nav"><a href="/">Home</a><a href="/admin">Admin</a></div>
+<h1>Activity Stats</h1>
+<div class="card">
+  <div class="filters">
+    <select id="filter-client"><option value="">All Clients</option></select>
+    <select id="filter-alias"><option value="">All Aliases</option></select>
+    <input id="filter-command" type="text" placeholder="Filter command..." style="min-width:150px;">
+    <select id="filter-perpage" style="padding:6px 10px;border-radius:4px;border:1px solid #d0d7de;">
+      <option value="20">20 / page</option>
+      <option value="50" selected>50 / page</option>
+      <option value="100">100 / page</option>
+      <option value="200">200 / page</option>
+    </select>
+    <button class="btn btn-gen" onclick="applyFilters()">Search</button>
+  </div>
+</div>
+<div id="stats-cards" class="stats-grid"></div>
+<div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
+<div id="year-graphs"></div>
+<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th>Seconds</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th>Mean</th></tr></thead><tbody></tbody></table></div>
+<div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
+<div class="card"><h2>Stats by Client</h2><div id="client-stats"></div></div>
+<div class="card"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
+<div class="card"><h2>Stats by Command</h2><div id="command-stats"></div></div>
+<div class="card"><h2>Records</h2>
+<div id="records-table"></div>
+<div id="records-paging" style="margin-top:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"></div>
+</div>
+<script>
+let recState = {page:1, perPage:50};
+function getFilters() {
+  return {
+    client_id: document.getElementById('filter-client').value,
+    alias: document.getElementById('filter-alias').value,
+    command: document.getElementById('filter-command').value.trim()
+  };
+}
+function buildParams(obj) {
+  const f = getFilters();
+  const p = new URLSearchParams();
+  for(const k in obj) p.set(k, String(obj[k]));
+  if(f.client_id) p.set('client_id', f.client_id);
+  if(f.alias) p.set('alias', f.alias);
+  if(f.command) p.set('command', f.command);
+  return p;
+}
+async function applyFilters() {
+  recState.page = 1;
+  await loadAll();
+}
+async function loadAll() {
+  await Promise.all([
+    loadStats(),
+    loadSvg(),
+    loadClientStats(),
+    loadAliasStats(),
+    loadCommandStats(),
+    loadRecords()
+  ]);
+}
+async function loadClients() {
+  const r = await fetch('/api/clients');
+  if(!r.ok) return;
+  const data = await r.json();
+  const sel = document.getElementById('filter-client');
+  data.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
+  });
+}
+async function loadAliases() {
+  const r = await fetch('/api/aliases');
+  if(!r.ok) return;
+  const data = await r.json();
+  const sel = document.getElementById('filter-alias');
+  data.forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a; opt.textContent = a;
+    sel.appendChild(opt);
+  });
+}
+function fmtDate(ts) {
+  if(!ts) return '-';
+  const d = new Date(ts*1000);
+  return d.toISOString().slice(0,19).replace('T',' ');
+}
+function fmtDur(s) {
+  if(s==null) return '-';
+  const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  if(h>0) return h+'h '+m+'m '+sec+'s';
+  if(m>0) return m+'m '+sec+'s';
+  return sec+'s';
+}
+async function loadStats() {
+  const r = await fetch('/api/stats?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const s = await r.json();
+  document.getElementById('stats-cards').innerHTML =
+    '<div class="stat-card"><div class="stat-value">' + s.total.total_days + '</div><div class="stat-label">Total Days</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + s.total.total_times + '</div><div class="stat-label">Total Times</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + s.total.total_seconds_hr + '</div><div class="stat-label">Total Duration</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + s.total.mean_usage_hr + '</div><div class="stat-label">Mean / Session</div></div>';
+  let html = '';
+  s.past_n.forEach(p => {
+    html += '<tr><td>' + p.name + '</td><td>' + p.seconds + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td>' + p.mean_usage + 's</td></tr>';
+  });
+  document.querySelector('#past-n-table tbody').innerHTML = html;
+  document.getElementById('interval-stats').innerHTML =
+    '<p>Current interval: ' + s.interval.current_interval + ' days</p>' +
+    '<p>Max interval: ' + s.interval.max_interval + ' days</p>' +
+    '<p>Mean interval: ' + s.interval.mean_interval_hr + '</p>';
+}
+async function loadSvg() {
+  const r = await fetch('/api/svg?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  document.getElementById('svg-all-time').innerHTML = data.all_time;
+  let yhtml = '';
+  data.years.forEach(y => {
+    yhtml += '<div class="card"><h2>' + y[0] + '</h2><div class="year-svg">' + y[1] + '</div></div>';
+  });
+  document.getElementById('year-graphs').innerHTML = yhtml;
+}
+async function loadClientStats() {
+  const r = await fetch('/api/stats/by-client?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  let html = '<table><tr><th>Client</th><th>Total</th><th>Times</th><th>Mean</th></tr>';
+  if(data.length===0) {
+    html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
+  } else {
+    data.forEach(s => {
+      html += '<tr><td>' + s.client_id + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+    });
+  }
+  html += '</table>';
+  document.getElementById('client-stats').innerHTML = html;
+}
+async function loadAliasStats() {
+  const r = await fetch('/api/stats/by-alias?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  let html = '<table><tr><th>Alias</th><th>Total</th><th>Times</th><th>Mean</th></tr>';
+  if(data.length===0) {
+    html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
+  } else {
+    data.forEach(s => {
+      html += '<tr><td>' + s.alias + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+    });
+  }
+  html += '</table>';
+  document.getElementById('alias-stats').innerHTML = html;
+}
+async function loadCommandStats() {
+  const r = await fetch('/api/stats/by-command?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  let html = '<table><tr><th>Command</th><th>Total</th><th>Times</th><th>Mean</th></tr>';
+  if(data.length===0) {
+    html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
+  } else {
+    data.forEach(s => {
+      html += '<tr><td class="code">' + (s.command||'-') + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+    });
+  }
+  html += '</table>';
+  document.getElementById('command-stats').innerHTML = html;
+}
+async function loadRecords() {
+  recState.perPage = parseInt(document.getElementById('filter-perpage').value);
+  const params = buildParams({page: recState.page, per_page: recState.perPage});
+  const r = await fetch('/api/records?' + params.toString());
+  if(!r.ok) { document.getElementById('records-table').innerHTML = '<p>Error: ' + r.status + '</p>'; return; }
+  const data = await r.json();
+  let html = '<table><tr><th>ID</th><th>Client</th><th>Alias</th><th>Command</th><th>Start</th><th>End</th><th>Duration</th></tr>';
+  if(data.records.length===0) {
+    html += '<tr><td colspan="7" style="text-align:center;color:#666;">No records</td></tr>';
+  } else {
+    data.records.forEach(rec => {
+      html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td>' + fmtDur(rec.duration_seconds) + '</td></tr>';
+    });
+  }
+  html += '</table>';
+  document.getElementById('records-table').innerHTML = html;
+  let pg = '';
+  pg += '<span style="color:#666;font-size:12px;">Total: ' + data.total + ' | Page ' + data.page + ' / ' + data.total_pages + '</span>';
+  if(data.total_pages > 1) {
+    pg += '<span style="display:flex;gap:5px;">';
+    if(data.page > 1) pg += '<button class="btn" onclick="goPage(' + (data.page-1) + ')">Prev</button>';
+    let start = Math.max(1, data.page - 3);
+    let end = Math.min(data.total_pages, data.page + 3);
+    for(let i=start;i<=end;i++) {
+      if(i===data.page) pg += '<button class="btn" style="background:#0969da;color:#fff;">' + i + '</button>';
+      else pg += '<button class="btn" onclick="goPage(' + i + ')">' + i + '</button>';
     }
+    if(data.page < data.total_pages) pg += '<button class="btn" onclick="goPage(' + (data.page+1) + ')">Next</button>';
+    pg += '</span>';
+  }
+  document.getElementById('records-paging').innerHTML = pg;
+}
+function goPage(p) { recState.page = p; loadRecords(); }
+document.getElementById('filter-command').addEventListener('keypress', e => { if(e.key==='Enter') { applyFilters(); } });
+loadClients().then(() => loadAliases().then(() => loadAll()));
+</script>
+</body></html>"#;
 
-    html.push_str(r#"<div class="card"><h2>Past N Stats</h2><table><tr><th>Period</th><th>Seconds</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th>Mean</th></tr>"#);
-    for p in &stats.past_n {
-        html.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{:.2}%</td><td>{}</td><td>{:.2}%</td><td>{}s</td></tr>",
-            p.name, p.seconds, p.ratio, p.times, p.day_ratio, p.mean_usage
-        ));
+async fn web_index(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Html<String>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
     }
-    html.push_str("</table></div>");
-
-    html.push_str(&format!(
-        r#"<div class="card"><h2>Interval</h2><p>Current interval: {} days</p><p>Max interval: {} days</p><p>Mean interval: {}</p></div>"#,
-        stats.interval.current_interval,
-        stats.interval.max_interval,
-        stats.interval.mean_interval_hr
-    ));
-
-    html.push_str("</body></html>");
-    Ok(Html(html))
+    Ok(Html(INDEX_HTML.to_string()))
 }
 
 async fn web_admin(
@@ -366,7 +671,7 @@ async fn web_admin(
         return Err(unauthorized_web_response());
     }
     let mut conn = state.pool.lock().unwrap();
-    let orphaned = match db::get_orphaned_sessions(&mut conn, "__global__") {
+    let orphaned = match db::get_orphaned_sessions_admin(&mut conn) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error: {}", e);
@@ -476,10 +781,12 @@ async function discardSession(id) {
 async function genToken() {
     const desc = prompt('Token description:');
     if(!desc) return;
+    const clientId = prompt('Client ID (leave empty for default):') || undefined;
+    const body = clientId ? {description: desc, client_id: clientId} : {description: desc};
     const r = await fetch('/api/admin/tokens', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({description: desc})
+        body: JSON.stringify(body)
     });
     if(r.ok) {
         const data = await r.json();
@@ -502,30 +809,74 @@ async function revokeToken(token) {
     Ok(Html(html))
 }
 
-#[derive(Deserialize)]
-pub struct CreateTokenReq {
-    pub description: Option<String>,
+async fn api_list_records(
+    Query(q): Query<ListRecordsQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<RecordsPageResp>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_filter = q.client_id.unwrap_or_default();
+    let page = q.page.unwrap_or(1).max(1);
+    let per_page = q.per_page.unwrap_or(50).clamp(1, 500);
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+
+    let mut conn = state.pool.lock().unwrap();
+    let (records, total) = db::list_records_page(&mut conn, &client_filter, &alias, &command, page, per_page)
+        .map_err(|e| {
+            tracing::error!("DB error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+        })?;
+
+    let total_pages = (total + per_page - 1) / per_page;
+    let items: Vec<RecordPageItem> = records.into_iter().map(|r| RecordPageItem {
+        id: r.id,
+        client_id: r.client_id,
+        alias: r.alias,
+        command: r.command,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        duration_seconds: r.duration_seconds,
+    }).collect();
+
+    Ok(Json(RecordsPageResp {
+        records: items,
+        total,
+        page,
+        per_page,
+        total_pages,
+    }))
 }
 
-#[derive(Serialize)]
-pub struct CreateTokenResp {
-    pub token: String,
+async fn api_list_clients(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<String>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let mut conn = state.pool.lock().unwrap();
+    let clients = db::distinct_client_ids(&mut conn).map_err(|e| {
+        tracing::error!("DB error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(clients))
 }
 
 async fn api_list_tokens(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Json<Vec<db::ApiToken>>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<Vec<db::ApiToken>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
     let mut conn = state.pool.lock().unwrap();
-    let all_tokens = db::list_api_tokens(&mut conn).map_err(|e| {
+    let tokens = db::list_api_tokens(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
-    // Filter to only tokens belonging to this client
-    let tokens: Vec<db::ApiToken> = all_tokens.into_iter()
-        .filter(|t| t.client_id == client_id)
-        .collect();
     Ok(Json(tokens))
 }
 
@@ -533,13 +884,16 @@ async fn api_create_token(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<CreateTokenReq>,
-) -> Result<Json<CreateTokenResp>, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
+) -> Result<Json<CreateTokenResp>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = req.client_id.unwrap_or_else(|| "default".to_string());
     let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
     let mut conn = state.pool.lock().unwrap();
     db::add_api_token(&mut conn, &token, &client_id, req.description.as_deref()).map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
     Ok(Json(CreateTokenResp { token }))
 }
@@ -548,27 +902,76 @@ async fn api_revoke_token(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(token): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let client_id = check_api_auth(&state, &headers).await?;
-    let mut conn = state.pool.lock().unwrap();
-    // Verify the token belongs to this client before deleting
-    let all_tokens = db::list_api_tokens(&mut conn).map_err(|e| {
-        tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let owns_token = all_tokens.iter().any(|t| t.token == token && t.client_id == client_id);
-    if !owns_token {
-        return Err(StatusCode::FORBIDDEN);
+) -> Result<StatusCode, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
     }
+    let mut conn = state.pool.lock().unwrap();
     let ok = db::delete_api_token(&mut conn, &token).map_err(|e| {
         tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
     if ok {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err((StatusCode::NOT_FOUND, "Not Found").into_response())
     }
+}
+
+async fn api_get_daily_data(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<(String, i64)>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Daily data error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
+async fn api_get_svg(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<SvgResp>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Daily data error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    let all_time = generate_svg_calendar(&daily, None);
+    let years = generate_all_years_svgs(&daily);
+    Ok(Json(SvgResp { all_time, years }))
+}
+
+async fn api_get_aliases(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<String>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_stats_by_alias(&mut conn, "__global__").map_err(|e| {
+        tracing::error!("Stats error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    let aliases: Vec<String> = data.into_iter().map(|s| s.alias).collect();
+    Ok(Json(aliases))
 }
 
 fn html_escape(s: &str) -> String {
