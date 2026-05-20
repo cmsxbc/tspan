@@ -56,15 +56,13 @@ pub fn human_readable_time(seconds: i64) -> String {
     if days > 0 {
         parts.push(format!("{} d", days));
     }
-    if hours > 0 {
-        parts.push(format!("{} h", hours));
+    if hours > 0 || (days > 0 && (mins > 0 || rem > 0)) {
+        parts.push(format!("{:02} h", hours));
     }
-    if mins > 0 {
-        parts.push(format!("{} m", mins));
+    if mins > 0 || (hours > 0 && rem > 0) || (days > 0 && rem > 0) {
+        parts.push(format!("{:02} m", mins));
     }
-    if rem > 0 {
-        parts.push(format!("{} s", rem));
-    }
+    parts.push(format!("{:02} s", rem));
     parts.join(" ")
 }
 

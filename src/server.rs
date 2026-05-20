@@ -447,7 +447,7 @@ h1,h2{margin-top:0}
 table{width:100%;border-collapse:collapse;margin-top:10px}
 th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #eee}
 th{font-size:12px;color:#666;font-weight:600}
-.col-dur{white-space:nowrap;min-width:90px;text-align:right;font-variant-numeric:tabular-nums}
+.col-dur{white-space:nowrap;min-width:110px;text-align:right;font-variant-numeric:tabular-nums}
 .nav{margin-bottom:20px}
 .nav a{color:#0969da;text-decoration:none;margin-right:15px}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px;align-items:center;}
@@ -549,9 +549,9 @@ function fmtDur(s) {
   if(s==null) return '-';
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
   let out='';
-  if(h>0) out+=h+' h ';
-  if(m>0) out+=m+' m ';
-  if(sec>0 || out==='') out+=sec+' s';
+  if(h>0) out+=String(h).padStart(2,'0')+' h ';
+  if(m>0 || h>0) out+=String(m).padStart(2,'0')+' m ';
+  out+=String(sec).padStart(2,'0')+' s';
   return out.trim();
 }
 async function loadStats() {
