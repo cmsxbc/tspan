@@ -17,6 +17,13 @@ fn color_for_seconds(seconds: i64) -> &'static str {
     }
 }
 
+fn color_idx_for_seconds(seconds: i64) -> i32 {
+    if seconds == 0 { 0 }
+    else if seconds < 1800 { 1 }
+    else if seconds < 3600 { 2 }
+    else { 3 }
+}
+
 fn month_label(month: u32) -> &'static str {
     match month {
         1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
@@ -103,10 +110,9 @@ pub fn generate_svg_calendar(
         }
     }
 
-    // Draw cells
-    let _current_date = start_date;
-    let mut prev_month = 0u32;
-
+    // Build grid
+    let gap_half = CELL_GAP / 2;
+    let mut grid: Vec<Vec<Option<(i32, String, i64, NaiveDate)>>> = vec![vec![None; rows as usize]; cols as usize];
     for col in 0..cols {
         for row in 0..rows {
             let day_idx = if year.is_some() {
@@ -115,38 +121,77 @@ pub fn generate_svg_calendar(
             } else {
                 col + row as i64 * cols
             };
-
             if day_idx < 0 || day_idx >= total_days {
                 continue;
             }
-
             let date = start_date + chrono::Duration::days(day_idx);
             if date > end_date {
                 continue;
             }
-
             let day_str = date.format("%Y-%m-%d").to_string();
             let seconds = day_map.get(&day_str).copied().unwrap_or(0);
-            let color = color_for_seconds(seconds);
+            let color_idx = color_idx_for_seconds(seconds);
+            grid[col as usize][row as usize] = Some((color_idx, day_str, seconds, date));
+        }
+    }
 
-            let x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
-            let y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
+    // Draw cells with connectivity
+    let mut prev_month = 0u32;
+    for col in 0..cols {
+        for row in 0..rows {
+            let cell = &grid[col as usize][row as usize];
+            if cell.is_none() { continue; }
+            let (color_idx, day_str, seconds, date) = cell.as_ref().unwrap();
+
+            let base_x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
+            let base_y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
+
+            let mut left_ext = 0;
+            let mut up_ext = 0;
+            let mut right_ext = 0;
+            let mut down_ext = 0;
+
+            if col > 0 {
+                if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][row as usize] {
+                    if *nidx == *color_idx { left_ext = gap_half; }
+                }
+            }
+            if row > 0 {
+                if let Some((nidx, _, _, _)) = &grid[col as usize][(row-1) as usize] {
+                    if *nidx == *color_idx { up_ext = gap_half; }
+                }
+            }
+            if col + 1 < cols {
+                if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][row as usize] {
+                    if *nidx == *color_idx { right_ext = gap_half; }
+                }
+            }
+            if row + 1 < rows {
+                if let Some((nidx, _, _, _)) = &grid[col as usize][(row+1) as usize] {
+                    if *nidx == *color_idx { down_ext = gap_half; }
+                }
+            }
 
             // Month label on first occurrence
             if year.is_some() && date.day() == 1 && date.month() != prev_month {
                 prev_month = date.month();
                 svg.push_str(&format!(
                     r#"<text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
-                    x, MARGIN_TOP - 5, grey, month_label(date.month())
+                    base_x, MARGIN_TOP - 5, grey, month_label(date.month())
                 ));
             }
 
-            let tooltip = format!("{}: {}s ({})", day_str, seconds, crate::stats::human_readable_time(seconds));
+            let x = base_x - left_ext;
+            let y = base_y - up_ext;
+            let w = CELL_SIZE + left_ext + right_ext;
+            let h = CELL_SIZE + up_ext + down_ext;
+            let color = color_for_seconds(*seconds);
+            let tooltip = format!("{}: {}s ({})", day_str, seconds, crate::stats::human_readable_time(*seconds));
             svg.push_str(&format!(
                 r#"<rect x="{}" y="{}" width="{}" height="{}" rx="2" fill="{}" stroke="rgba(0,0,0,0.05)" stroke-width="1">
                     <title>{}</title>
                 </rect>"#,
-                x, y, CELL_SIZE, CELL_SIZE, color, tooltip
+                x, y, w, h, color, tooltip
             ));
         }
     }
