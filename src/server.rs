@@ -433,6 +433,17 @@ h1,h2{margin-top:0}
 .stat-card{background:#fff;border-radius:8px;padding:15px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
 .stat-value{font-size:24px;font-weight:bold;color:#0969da}
 .stat-label{font-size:12px;color:#666;margin-top:5px}
+.interval-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:15px}
+.interval-card{background:#fff;border-radius:8px;padding:18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.08);border-top:4px solid #0969da}
+.interval-card.max{border-top-color:#cf222e}
+.interval-card.mean{border-top-color:#2da44e}
+.interval-icon{font-size:22px;margin-bottom:6px}
+.interval-value{font-size:28px;font-weight:bold;color:#333}
+.interval-unit{font-size:13px;color:#666}
+.interval-bar-bg{background:#ebedf0;border-radius:4px;height:8px;margin-top:10px;overflow:hidden}
+.interval-bar-fill{height:100%;border-radius:4px;background:#0969da;transition:width .3s}
+.interval-card.max .interval-bar-fill{background:#cf222e}
+.interval-card.mean .interval-bar-fill{background:#2da44e}
 table{width:100%;border-collapse:collapse;margin-top:10px}
 th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #eee}
 th{font-size:12px;color:#666;font-weight:600}
@@ -554,10 +565,31 @@ async function loadStats() {
     html += '<tr><td>' + p.name + '</td><td>' + p.seconds + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td>' + p.mean_usage + 's</td></tr>';
   });
   document.querySelector('#past-n-table tbody').innerHTML = html;
+  const maxInt = s.interval.max_interval || 1;
+  const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
+  const meanDays = Math.round(s.interval.mean_interval / 86400);
+  const meanPct = Math.min(100, Math.round((meanDays / maxInt) * 100));
   document.getElementById('interval-stats').innerHTML =
-    '<p>Current interval: ' + s.interval.current_interval + ' days</p>' +
-    '<p>Max interval: ' + s.interval.max_interval + ' days</p>' +
-    '<p>Mean interval: ' + s.interval.mean_interval_hr + '</p>';
+    '<div class="interval-grid">' +
+    '<div class="interval-card">' +
+    '<div class="interval-icon">🔥</div>' +
+    '<div class="interval-value">' + s.interval.current_interval + '<span class="interval-unit"> days</span></div>' +
+    '<div class="stat-label">Current Interval</div>' +
+    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
+    '</div>' +
+    '<div class="interval-card max">' +
+    '<div class="interval-icon">📊</div>' +
+    '<div class="interval-value">' + s.interval.max_interval + '<span class="interval-unit"> days</span></div>' +
+    '<div class="stat-label">Max Interval</div>' +
+    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:100%"></div></div>' +
+    '</div>' +
+    '<div class="interval-card mean">' +
+    '<div class="interval-icon">⏱</div>' +
+    '<div class="interval-value">' + s.interval.mean_interval_hr + '</div>' +
+    '<div class="stat-label">Mean Interval</div>' +
+    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:' + meanPct + '%"></div></div>' +
+    '</div>' +
+    '</div>';
 }
 async function loadSvg() {
   const r = await fetch('/api/svg?' + buildParams({}).toString());
