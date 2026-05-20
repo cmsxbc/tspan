@@ -135,44 +135,19 @@ pub fn generate_svg_calendar(
         }
     }
 
-    // Draw cells with connectivity
+    let border_color = "#1f2328";
+
+    // Phase 1: Draw base cells
     let mut prev_month = 0u32;
     for col in 0..cols {
         for row in 0..rows {
             let cell = &grid[col as usize][row as usize];
             if cell.is_none() { continue; }
-            let (color_idx, day_str, seconds, date) = cell.as_ref().unwrap();
+            let (_, day_str, seconds, date) = cell.as_ref().unwrap();
 
             let base_x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
             let base_y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
 
-            let mut left_ext = 0;
-            let mut up_ext = 0;
-            let mut right_ext = 0;
-            let mut down_ext = 0;
-
-            if col > 0 {
-                if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][row as usize] {
-                    if *nidx == *color_idx { left_ext = gap_half; }
-                }
-            }
-            if row > 0 {
-                if let Some((nidx, _, _, _)) = &grid[col as usize][(row-1) as usize] {
-                    if *nidx == *color_idx { up_ext = gap_half; }
-                }
-            }
-            if col + 1 < cols {
-                if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][row as usize] {
-                    if *nidx == *color_idx { right_ext = gap_half; }
-                }
-            }
-            if row + 1 < rows {
-                if let Some((nidx, _, _, _)) = &grid[col as usize][(row+1) as usize] {
-                    if *nidx == *color_idx { down_ext = gap_half; }
-                }
-            }
-
-            // Month label on first occurrence
             if year.is_some() && date.day() == 1 && date.month() != prev_month {
                 prev_month = date.month();
                 svg.push_str(&format!(
@@ -181,17 +156,62 @@ pub fn generate_svg_calendar(
                 ));
             }
 
-            let x = base_x - left_ext;
-            let y = base_y - up_ext;
-            let w = CELL_SIZE + left_ext + right_ext;
-            let h = CELL_SIZE + up_ext + down_ext;
             let color = color_for_seconds(*seconds);
             let tooltip = format!("{}: {}s ({})", day_str, seconds, crate::stats::human_readable_time(*seconds));
             svg.push_str(&format!(
-                r#"<rect x="{}" y="{}" width="{}" height="{}" rx="2" fill="{}" stroke="rgba(0,0,0,0.05)" stroke-width="1">
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" rx="0">
                     <title>{}</title>
                 </rect>"#,
-                x, y, w, h, color, tooltip
+                base_x, base_y, CELL_SIZE, CELL_SIZE, color, tooltip
+            ));
+        }
+    }
+
+    // Phase 2: Draw gap fillers (right, bottom, corner)
+    for col in 0..cols {
+        for row in 0..rows {
+            let cell = &grid[col as usize][row as usize];
+            if cell.is_none() { continue; }
+            let (color_idx, _, seconds, _) = cell.as_ref().unwrap();
+            let base_x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
+            let base_y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
+            let cell_color = color_for_seconds(*seconds);
+
+            let right_same = if col + 1 < cols {
+                if let Some((ridx, _, _, _)) = &grid[(col+1) as usize][row as usize] { *ridx == *color_idx } else { false }
+            } else { false };
+            let down_same = if row + 1 < rows {
+                if let Some((didx, _, _, _)) = &grid[col as usize][(row+1) as usize] { *didx == *color_idx } else { false }
+            } else { false };
+
+            // Right gap
+            let right_color = if right_same { cell_color } else { border_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + CELL_SIZE, base_y, CELL_GAP, CELL_SIZE, right_color
+            ));
+
+            // Bottom gap
+            let down_color = if down_same { cell_color } else { border_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x, base_y + CELL_SIZE, CELL_SIZE, CELL_GAP, down_color
+            ));
+
+            // Corner gap
+            let corner_color = if right_same && down_same {
+                let br_same = if col + 1 < cols && row + 1 < rows {
+                    if let Some((br_idx, _, _, _)) = &grid[(col+1) as usize][(row+1) as usize] {
+                        *br_idx == *color_idx
+                    } else { false }
+                } else { false };
+                if br_same { cell_color } else { border_color }
+            } else {
+                border_color
+            };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + CELL_SIZE, base_y + CELL_SIZE, CELL_GAP, CELL_GAP, corner_color
             ));
         }
     }
