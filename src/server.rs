@@ -264,22 +264,38 @@ async fn api_backup(
     ).into_response())
 }
 
+fn unauthorized_web_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"wyd-admin\"")],
+        "Unauthorized",
+    ).into_response()
+}
+
 async fn web_index(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Html<String>, StatusCode> {
-    check_web_auth(&state, &headers).await?;
+) -> Result<Html<String>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
     let mut conn = state.pool.lock().unwrap();
     // Web index shows global stats (all clients aggregated)
-    let stats = compute_stats(&mut conn, "__global__").map_err(|e| {
-        tracing::error!("Stats error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let stats = match compute_stats(&mut conn, "__global__") {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Stats error: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
+        }
+    };
 
-    let daily = stats::get_daily_data(&mut conn, "__global__").map_err(|e| {
-        tracing::error!("Daily data error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let daily = match stats::get_daily_data(&mut conn, "__global__") {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("Daily data error: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
+        }
+    };
 
     let all_svg = generate_svg_calendar(&daily, None);
     let year_svgs = generate_all_years_svgs(&daily);
@@ -345,18 +361,26 @@ th{font-size:12px;color:#666;font-weight:600}
 async fn web_admin(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Html<String>, StatusCode> {
-    check_web_auth(&state, &headers).await?;
+) -> Result<Html<String>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
     let mut conn = state.pool.lock().unwrap();
-    let orphaned = db::get_orphaned_sessions(&mut conn, "__global__").map_err(|e| {
-        tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let orphaned = match db::get_orphaned_sessions(&mut conn, "__global__") {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
+        }
+    };
 
-    let tokens = db::list_api_tokens(&mut conn).map_err(|e| {
-        tracing::error!("DB error: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let tokens = match db::list_api_tokens(&mut conn) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("DB error: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
+        }
+    };
 
     let now = chrono::Utc::now().timestamp();
 
