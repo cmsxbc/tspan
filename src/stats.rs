@@ -235,7 +235,7 @@ pub fn compute_stats_by_client(conn: &mut Connection, client_id: &str) -> anyhow
         "SELECT client_id, COALESCE(SUM(duration_seconds), 0), COUNT(*)
          FROM records WHERE status = 'completed' AND client_id = ?1
          GROUP BY client_id
-         ORDER BY total_seconds DESC"
+         ORDER BY 2 DESC"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = if is_global {
@@ -281,7 +281,7 @@ pub fn compute_stats_by_alias(conn: &mut Connection, client_id: &str) -> anyhow:
         "SELECT alias, COALESCE(SUM(duration_seconds), 0), COUNT(*)
          FROM records WHERE status = 'completed' AND client_id = ?1 AND alias IS NOT NULL AND alias != ''
          GROUP BY alias
-         ORDER BY total_seconds DESC"
+         ORDER BY 2 DESC"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = if is_global {
@@ -327,7 +327,7 @@ pub fn compute_stats_by_command(conn: &mut Connection, client_id: &str) -> anyho
         "SELECT command, COALESCE(SUM(duration_seconds), 0), COUNT(*)
          FROM records WHERE status = 'completed' AND client_id = ?1 AND command IS NOT NULL AND command != ''
          GROUP BY command
-         ORDER BY total_seconds DESC"
+         ORDER BY 2 DESC"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = if is_global {
