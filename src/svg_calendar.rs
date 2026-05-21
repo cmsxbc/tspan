@@ -133,15 +133,17 @@ pub fn generate_svg_calendar(
         dark, title
     ));
 
-    let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let grey = "#666666";
-    for (i, wd) in weekdays.iter().enumerate() {
-        if i % 2 == 0 {
-            let y = MARGIN_TOP + i as i32 * STRIDE + INNER / 2 + BORDER + 4;
-            svg.push_str(&format!(
-                r#"<text x="5" y="{}" font-size="12" fill="{}">{}</text>"#,
-                y, grey, wd
-            ));
+    if year.is_some() {
+        let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        for (i, wd) in weekdays.iter().enumerate() {
+            if i % 2 == 0 {
+                let y = MARGIN_TOP + i as i32 * STRIDE + INNER / 2 + BORDER + 4;
+                svg.push_str(&format!(
+                    r#"<text x="5" y="{}" font-size="12" fill="{}">{}</text>"#,
+                    y, grey, wd
+                ));
+            }
         }
     }
 
