@@ -153,7 +153,7 @@ pub fn generate_svg_calendar(
         for col in 0..cols {
             let day_idx = if year.is_some() {
                 let offset = start_date.weekday().num_days_from_monday() as i64;
-                row * cols + col as i64 - offset
+                col * 7 + row as i64 - offset
             } else {
                 row * cols + col as i64
             };
