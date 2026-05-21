@@ -793,19 +793,20 @@ async function loadStats() {
   const maxDayRatio = Math.max(...s.past_n.map(p => p.day_ratio), baseDayRatio);
   const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), baseMean);
   function buildBar(val, maxVal, baseVal, isAllTime) {
-    if (maxVal <= 0) return '<div style="flex:1;"></div>';
+    if (maxVal <= 0) return '<div style="flex:1;height:14px;background:#ebedf0;border-radius:4px;"></div>';
     const barPct = val / maxVal * 100;
     const basePct = baseVal / maxVal * 100;
     if (isAllTime) {
       return '<div style="flex:1;display:flex;align-items:center;">' +
              '<div style="width:' + barPct.toFixed(1) + '%;height:14px;background:#d4a017;border-radius:4px;"></div></div>';
     } else if (val <= baseVal) {
-      return '<div style="flex:1;display:flex;align-items:center;">' +
-             '<div style="width:' + barPct.toFixed(1) + '%;height:14px;background:#0969da;border-radius:4px;"></div></div>';
+      return '<div style="flex:1;height:14px;background:#ebedf0;border-radius:4px;">' +
+             '<div style="width:' + barPct.toFixed(1) + '%;height:100%;background:#0969da;border-radius:4px;"></div></div>';
     } else {
-      return '<div style="flex:1;display:flex;align-items:center;">' +
-             '<div style="width:' + basePct.toFixed(1) + '%;height:14px;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
-             '<div style="width:' + (barPct - basePct).toFixed(1) + '%;height:14px;background:#2da44e;border-radius:0 4px 4px 0;"></div></div>';
+      return '<div style="flex:1;height:14px;background:#ebedf0;border-radius:4px;position:relative;">' +
+             '<div style="position:absolute;left:0;top:0;width:' + basePct.toFixed(1) + '%;height:100%;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
+             '<div style="position:absolute;left:' + basePct.toFixed(1) + '%;top:0;width:' + (barPct - basePct).toFixed(1) + '%;height:100%;background:#2da44e;border-radius:0 4px 4px 0;"></div>' +
+             '</div>';
     }
   }
   let html = '';
