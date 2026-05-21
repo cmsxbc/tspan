@@ -789,26 +789,20 @@ async function loadStats() {
   const baseRatio = s.total.total_ratio || 1;
   const baseDayRatio = s.total.total_day_ratio || 1;
   const baseMean = s.total.mean_usage || 1;
-  const maxRatio = Math.max(...s.past_n.map(p => p.ratio), baseRatio);
-  const maxDayRatio = Math.max(...s.past_n.map(p => p.day_ratio), baseDayRatio);
-  const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), baseMean);
-  function buildBar(val, maxVal, baseVal, isAllTime) {
-    if (maxVal <= 0) return '<div style="position:relative;flex:1;background:#ebedf0;border-radius:4px;height:14px;"></div>';
-    const barWidth = val / maxVal * 100;
-    const basePos = baseVal / maxVal * 100;
-    const barW = barWidth.toFixed(1);
-    const baseW = basePos.toFixed(1);
-    const bg = isAllTime ? '#f5e6b8' : '#ebedf0';
-    let inner = '';
+  function buildBar(val, baseVal, isAllTime) {
+    if (baseVal <= 0) return '<div style="width:120px;height:14px;background:#ebedf0;border-radius:4px;"></div>';
+    const barPx = Math.max(0, 120 * (val / baseVal));
     if (isAllTime) {
-      inner = '<div style="position:absolute;left:0;top:0;height:100%;width:' + barW + '%;background:#d4a017;border-radius:4px;"></div>';
+      return '<div style="width:120px;height:14px;background:#d4a017;border-radius:4px;"></div>';
     } else if (val <= baseVal) {
-      inner = '<div style="position:absolute;left:0;top:0;height:100%;width:' + barW + '%;background:#0969da;border-radius:4px;"></div>';
+      return '<div style="width:120px;height:14px;background:#ebedf0;border-radius:4px;">' +
+             '<div style="width:' + barPx.toFixed(1) + 'px;height:100%;background:#0969da;border-radius:4px;"></div></div>';
     } else {
-      inner = '<div style="position:absolute;left:0;top:0;height:100%;width:' + baseW + '%;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
-              '<div style="position:absolute;left:' + baseW + '%;top:0;height:100%;width:' + (barWidth - basePos).toFixed(1) + '%;background:#2da44e;border-radius:0 4px 4px 0;"></div>';
+      return '<div style="display:flex;align-items:center;">' +
+             '<div style="width:120px;height:14px;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
+             '<div style="width:' + (barPx - 120).toFixed(1) + 'px;height:14px;background:#2da44e;border-radius:0 4px 4px 0;"></div>' +
+             '</div>';
     }
-    return '<div style="position:relative;flex:1;background:' + bg + ';border-radius:4px;height:14px;">' + inner + '</div>';
   }
   let html = '';
   s.past_n.forEach(p => {
@@ -816,7 +810,7 @@ async function loadStats() {
     html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.ratio, maxRatio, baseRatio, isAllTime) +
+      buildBar(p.ratio, baseRatio, isAllTime) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
@@ -824,13 +818,13 @@ async function loadStats() {
       '<td>' + p.days + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.day_ratio, maxDayRatio, baseDayRatio, isAllTime) +
+      buildBar(p.day_ratio, baseDayRatio, isAllTime) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.day_ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.mean_usage, maxMean, baseMean, isAllTime) +
+      buildBar(p.mean_usage, baseMean, isAllTime) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + fmtDur(p.mean_usage) + '</span>' +
       '</div>' +
       '</td></tr>';
