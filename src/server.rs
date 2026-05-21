@@ -426,7 +426,7 @@ async fn api_backup(
 const INDEX_HTML: &str = r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>WYD Stats</title>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#333;background:#f6f8fa}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;padding:20px 40px;color:#333;background:#f6f8fa}
 .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
 h1,h2{margin-top:0}
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
@@ -728,7 +728,7 @@ async fn web_admin(
     html.push_str(r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>WYD Admin</title>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#333;background:#f6f8fa}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;padding:20px 40px;color:#333;background:#f6f8fa}
 .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
 h1,h2{margin-top:0}
 table{width:100%;border-collapse:collapse;margin-top:10px}

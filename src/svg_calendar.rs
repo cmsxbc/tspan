@@ -77,8 +77,10 @@ pub fn generate_svg_calendar(
         ((total_days as f64).sqrt().ceil() as i64).max(7)
     };
 
-    let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + 20;
-    let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + 30;
+    let right_margin = if year.is_some() { 22 } else { 20 };
+    let bottom_margin = if year.is_some() { 48 } else { 30 };
+    let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + right_margin;
+    let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + bottom_margin;
 
     let mut svg = format!(
         r#"<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">"#,
@@ -109,6 +111,8 @@ pub fn generate_svg_calendar(
 
     // Build grid: (col, row) -> (color_idx, day_str, seconds, date)
     let mut grid: Vec<Vec<Option<(i32, String, i64, NaiveDate)>>> = vec![vec![None; rows as usize]; cols as usize];
+    let mut col_counts = vec![0i32; cols as usize];
+    let mut row_counts = vec![0i32; rows as usize];
     for col in 0..cols {
         for row in 0..rows {
             let day_idx = if year.is_some() {
@@ -127,6 +131,10 @@ pub fn generate_svg_calendar(
             let day_str = date.format("%Y-%m-%d").to_string();
             let seconds = day_map.get(&day_str).copied().unwrap_or(0);
             let color_idx = color_idx_for_seconds(seconds);
+            if seconds > 0 {
+                col_counts[col as usize] += 1;
+                row_counts[row as usize] += 1;
+            }
             grid[col as usize][row as usize] = Some((color_idx, day_str, seconds, date));
         }
     }
@@ -247,8 +255,32 @@ pub fn generate_svg_calendar(
         }
     }
 
+    // Weekly / daily-of-week counts (year view only)
+    if year.is_some() {
+        for row in 0..rows {
+            let y = MARGIN_TOP + row as i32 * STRIDE + INNER / 2 + BORDER + 4;
+            let x = MARGIN_LEFT + cols as i32 * STRIDE + 2;
+            svg.push_str(&format!(
+                r#"<text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
+                x, y, grey, row_counts[row as usize]
+            ));
+        }
+        for col in 0..cols {
+            let x = MARGIN_LEFT + col as i32 * STRIDE + BORDER + INNER / 2;
+            let y = MARGIN_TOP + rows as i32 * STRIDE + 10;
+            svg.push_str(&format!(
+                r#"<text x="{}" y="{}" font-size="9" fill="{}" text-anchor="middle">{}</text>"#,
+                x, y, grey, col_counts[col as usize]
+            ));
+        }
+    }
+
     // Legend
-    let legend_y = svg_height - 20;
+    let legend_y = if year.is_some() {
+        MARGIN_TOP + rows as i32 * STRIDE + 30
+    } else {
+        svg_height - 20
+    };
     let legend_x = MARGIN_LEFT;
     let levels = [(0, "0s"), (1, "<30m"), (1800, "30-60m"), (3600, ">60m")];
     for (i, (secs, label)) in levels.iter().enumerate() {
