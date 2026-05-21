@@ -745,9 +745,13 @@ async function loadStats() {
     '<div class="stat-label">Mean Interval</div>' +
     '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + meanPct + '%;background:#2da44e;"></div></div>' +
     '</div>';
+  const avgRatio = s.past_n.reduce((sum, p) => sum + p.ratio, 0) / (s.past_n.length || 1);
+  const avgDayRatio = s.past_n.reduce((sum, p) => sum + p.day_ratio, 0) / (s.past_n.length || 1);
   let html = '';
   s.past_n.forEach(p => {
-    html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td class="col-dur">' + fmtDur(p.mean_usage) + '</td></tr>';
+    const ratioColor = p.ratio >= avgRatio ? '#2da44e' : '#666';
+    const dayRatioColor = p.day_ratio >= avgDayRatio ? '#2da44e' : '#666';
+    html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td><td style="color:' + ratioColor + '">' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td style="color:' + dayRatioColor + '">' + p.day_ratio.toFixed(2) + '%</td><td class="col-dur">' + fmtDur(p.mean_usage) + '</td></tr>';
   });
   document.querySelector('#past-n-table tbody').innerHTML = html;
 }
@@ -853,11 +857,31 @@ async function loadWeekdayWeekendStats() {
     document.getElementById('wd-we-stats').innerHTML = '<p style="color:#666;">No data</p>';
     return;
   }
-  let html = '<table><tr><th></th><th>Total</th><th>Times</th><th>Mean</th></tr>';
-  html += '<tr><td>Weekday</td><td>' + data.weekday_total_hr + '</td><td>' + data.weekday_times + '</td><td>' + data.weekday_mean_hr + '</td></tr>';
-  html += '<tr><td>Weekend</td><td>' + data.weekend_total_hr + '</td><td>' + data.weekend_times + '</td><td>' + data.weekend_mean_hr + '</td></tr>';
-  html += '</table>';
-  document.getElementById('wd-we-stats').innerHTML = html;
+  const maxTotal = Math.max(data.weekday_total_seconds, data.weekend_total_seconds, 1);
+  const maxTimes = Math.max(data.weekday_times, data.weekend_times, 1);
+  const maxMean = Math.max(data.weekday_mean_seconds, data.weekend_mean_seconds, 1);
+  const barMax = 130;
+  function bar(val, max) { return Math.max(2, Math.round(val / max * barMax)); }
+  let svg = '<svg width="100%" height="170" viewBox="0 0 260 170" xmlns="http://www.w3.org/2000/svg">';
+  svg += '<text x="5" y="18" font-size="11" fill="#333" font-weight="600">Total</text>';
+  svg += '<rect x="55" y="8" width="' + bar(data.weekday_total_seconds, maxTotal) + '" height="12" fill="#0969da" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekday_total_seconds, maxTotal)) + '" y="18" font-size="9" fill="#666">' + data.weekday_total_hr + '</text>';
+  svg += '<rect x="55" y="22" width="' + bar(data.weekend_total_seconds, maxTotal) + '" height="12" fill="#2da44e" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekend_total_seconds, maxTotal)) + '" y="32" font-size="9" fill="#666">' + data.weekend_total_hr + '</text>';
+  svg += '<text x="5" y="58" font-size="11" fill="#333" font-weight="600">Times</text>';
+  svg += '<rect x="55" y="48" width="' + bar(data.weekday_times, maxTimes) + '" height="12" fill="#0969da" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekday_times, maxTimes)) + '" y="58" font-size="9" fill="#666">' + data.weekday_times + '</text>';
+  svg += '<rect x="55" y="62" width="' + bar(data.weekend_times, maxTimes) + '" height="12" fill="#2da44e" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekend_times, maxTimes)) + '" y="72" font-size="9" fill="#666">' + data.weekend_times + '</text>';
+  svg += '<text x="5" y="98" font-size="11" fill="#333" font-weight="600">Mean</text>';
+  svg += '<rect x="55" y="88" width="' + bar(data.weekday_mean_seconds, maxMean) + '" height="12" fill="#0969da" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekday_mean_seconds, maxMean)) + '" y="98" font-size="9" fill="#666">' + data.weekday_mean_hr + '</text>';
+  svg += '<rect x="55" y="102" width="' + bar(data.weekend_mean_seconds, maxMean) + '" height="12" fill="#2da44e" rx="2"/>';
+  svg += '<text x="' + (60 + bar(data.weekend_mean_seconds, maxMean)) + '" y="112" font-size="9" fill="#666">' + data.weekend_mean_hr + '</text>';
+  svg += '<rect x="55" y="140" width="10" height="10" fill="#0969da" rx="2"/><text x="69" y="149" font-size="10" fill="#666">Weekday</text>';
+  svg += '<rect x="135" y="140" width="10" height="10" fill="#2da44e" rx="2"/><text x="149" y="149" font-size="10" fill="#666">Weekend</text>';
+  svg += '</svg>';
+  document.getElementById('wd-we-stats').innerHTML = svg;
 }
 async function loadStreaks() {
   const r = await fetch('/api/stats/streaks?' + buildParams({}).toString());
@@ -877,28 +901,35 @@ async function loadMonthlyTrend() {
     document.getElementById('monthly-trend').innerHTML = '<p style="color:#666;">No data</p>';
     return;
   }
-  const w = 800, h = 160, pad = 30;
+  const w = 800, h = 180, pad = 30;
   const maxSec = Math.max(...data.map(d => d.total_seconds), 1);
+  const maxTimes = Math.max(...data.map(d => d.total_times), 1);
   const stepX = data.length > 1 ? (w - pad * 2) / (data.length - 1) : 0;
-  let points = '';
+  let points = '', timePoints = '';
   data.forEach((d, i) => {
     const x = pad + i * stepX;
     const y = h - pad - (d.total_seconds / maxSec) * (h - pad * 2);
+    const yTimes = h - pad - (d.total_times / maxTimes) * (h - pad * 2);
     points += x + ',' + y + ' ';
+    timePoints += x + ',' + yTimes + ' ';
   });
   let svg = '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">';
   svg += '<polyline points="' + points.trim() + '" fill="none" stroke="#0969da" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+  svg += '<polyline points="' + timePoints.trim() + '" fill="none" stroke="#2da44e" stroke-width="1.5" stroke-dasharray="4,4" stroke-linecap="round" stroke-linejoin="round"/>';
   const labelStep = Math.max(1, Math.floor(data.length / 10));
   data.forEach((d, i) => {
     const x = pad + i * stepX;
     const y = h - pad - (d.total_seconds / maxSec) * (h - pad * 2);
+    const yTimes = h - pad - (d.total_times / maxTimes) * (h - pad * 2);
     svg += '<circle cx="' + x + '" cy="' + y + '" r="3" fill="#0969da"/>';
+    svg += '<circle cx="' + x + '" cy="' + yTimes + '" r="2" fill="#2da44e"/>';
     svg += '<title>' + d.year_month + ': ' + d.total_seconds_hr + ' (' + d.total_times + ' times)</title>';
     if(i % labelStep === 0) {
       svg += '<text x="' + x + '" y="' + (h - 5) + '" font-size="10" fill="#666" text-anchor="middle">' + d.year_month + '</text>';
     }
   });
-  svg += '<text x="' + pad + '" y="18" font-size="10" fill="#666" text-anchor="middle">' + fmtDur(maxSec) + '</text>';
+  svg += '<text x="' + pad + '" y="16" font-size="10" fill="#0969da" text-anchor="middle">● Duration</text>';
+  svg += '<text x="' + (pad + 80) + '" y="16" font-size="10" fill="#2da44e" text-anchor="middle">- - Times</text>';
   svg += '</svg>';
   document.getElementById('monthly-trend').innerHTML = svg;
 }
