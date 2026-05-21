@@ -806,7 +806,7 @@ async function loadStats() {
     } else {
       return '<div style="flex:1;position:relative;height:14px;">' +
              '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
-             '<div style="position:absolute;left:' + trackPct.toFixed(1) + '%;top:0;width:' + (barPct - trackPct).toFixed(1) + '%;height:100%;background:#cf222e;border-radius:0 4px 4px 0;"></div>' +
+             '<div style="position:absolute;left:' + trackPct.toFixed(1) + '%;top:0;width:' + (barPct - trackPct).toFixed(1) + '%;height:100%;background:#e5534b;border-radius:0 4px 4px 0;"></div>' +
              '</div>';
     }
   }
