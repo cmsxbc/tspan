@@ -479,9 +479,9 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
-<div class="card"><h2>Stats by Client</h2><div id="client-stats"></div></div>
-<div class="card"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
-<div class="card"><h2>Stats by Command</h2><div id="command-stats"></div></div>
+<div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
+<div class="card" id="card-by-alias"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
+<div class="card" id="card-by-command"><h2>Stats by Command</h2><div id="command-stats"></div></div>
 <div class="card"><h2>Records</h2>
 <div id="records-table"></div>
 <div id="records-paging" style="margin-top:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"></div>
@@ -508,7 +508,16 @@ async function applyFilters() {
   recState.page = 1;
   await loadAll();
 }
+function updateGroupStatsVisibility() {
+  const f = getFilters();
+  const hasFilter = !!(f.client_id || f.alias || f.command);
+  const d = hasFilter ? 'none' : '';
+  document.getElementById('card-by-client').style.display = d;
+  document.getElementById('card-by-alias').style.display = d;
+  document.getElementById('card-by-command').style.display = d;
+}
 async function loadAll() {
+  updateGroupStatsVisibility();
   await Promise.all([
     loadStats(),
     loadSvg(),
