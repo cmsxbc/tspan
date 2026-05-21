@@ -27,6 +27,53 @@ fn color_idx_for_seconds(seconds: i64) -> i32 {
     else { 3 }
 }
 
+fn append_segment_digit(svg: &mut String, digit: i32, x: i32, y: i32, w: i32, h: i32, color: &str) {
+    let t = (w.max(h) / 4).max(2);
+    let hh = h / 2;
+    let seg_on: [bool; 7] = match digit {
+        0 => [true,  true,  true,  true,  true,  true,  false],
+        1 => [false, true,  true,  false, false, false, false],
+        2 => [true,  true,  false, true,  true,  false, true ],
+        3 => [true,  true,  true,  true,  false, false, true ],
+        4 => [false, true,  true,  false, false, true,  true ],
+        5 => [true,  false, true,  true,  false, true,  true ],
+        6 => [true,  false, true,  true,  true,  true,  true ],
+        7 => [true,  true,  true,  false, false, false, false],
+        8 => [true,  true,  true,  true,  true,  true,  true ],
+        9 => [true,  true,  true,  true,  false, true,  true ],
+        _ => [false; 7],
+    };
+    let segs = [
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x+t, y, x+w-t, y, x+w-t-1, y+t, x+t+1, y+t, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x+w, y+t, x+w, y+hh-1, x+w-t, y+hh-t, x+w-t, y+t+1, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x+w, y+hh+1, x+w, y+h-t, x+w-t, y+h-t-1, x+w-t, y+hh+t, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x+t, y+h, x+w-t, y+h, x+w-t-1, y+h-t, x+t+1, y+h-t, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x, y+hh+1, x, y+h-t, x+t, y+h-t-1, x+t, y+hh+t, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x, y+t, x, y+hh-1, x+t, y+hh-t, x+t, y+t+1, color),
+        format!(r#"<polygon points="{},{},{},{},{},{},{},{},{},{},{},{}" fill="{}"/>"#,
+            x+t+1, y+hh, x+t, y+hh-1, x+w-t, y+hh-1, x+w-t-1, y+hh,
+            x+w-t, y+hh+1, x+t, y+hh+1, color),
+    ];
+    for (i, on) in seg_on.iter().enumerate() {
+        if *on { svg.push_str(&segs[i]); }
+    }
+}
+
+fn draw_digital_number(svg: &mut String, number: i32, x: i32, y: i32, digit_w: i32, digit_h: i32, gap: i32, color: &str) {
+    let s = number.to_string();
+    for (i, ch) in s.chars().enumerate() {
+        let dx = x + i as i32 * (digit_w + gap);
+        let d = ch.to_digit(10).unwrap_or(0) as i32;
+        append_segment_digit(svg, d, dx, y, digit_w, digit_h, color);
+    }
+}
+
 fn month_label(month: u32) -> &'static str {
     match month {
         1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
@@ -255,23 +302,23 @@ pub fn generate_svg_calendar(
         }
     }
 
-    // Weekly / daily-of-week counts (year view only)
+    // Weekly / daily-of-week counts (year view only) — seven-segment style
     if year.is_some() {
+        let dig_w = 8;
+        let dig_h = 14;
+        let dig_gap = 1;
         for row in 0..rows {
-            let y = MARGIN_TOP + row as i32 * STRIDE + INNER / 2 + BORDER + 4;
+            let cy = MARGIN_TOP + row as i32 * STRIDE + STRIDE / 2;
+            let y = cy - dig_h / 2;
             let x = MARGIN_LEFT + cols as i32 * STRIDE + 2;
-            svg.push_str(&format!(
-                r#"<text x="{}" y="{}" font-size="12" fill="{}">{}</text>"#,
-                x, y, grey, row_counts[row as usize]
-            ));
+            draw_digital_number(&mut svg, row_counts[row as usize], x, y, dig_w, dig_h, dig_gap, grey);
         }
         for col in 0..cols {
-            let x = MARGIN_LEFT + col as i32 * STRIDE + BORDER + INNER / 2;
-            let y = MARGIN_TOP + rows as i32 * STRIDE + 10;
-            svg.push_str(&format!(
-                r#"<text x="{}" y="{}" font-size="12" fill="{}" text-anchor="middle">{}</text>"#,
-                x, y, grey, col_counts[col as usize]
-            ));
+            let cx = MARGIN_LEFT + col as i32 * STRIDE + BORDER + INNER / 2;
+            let num_w = if col_counts[col as usize] >= 10 { dig_w * 2 + dig_gap } else { dig_w };
+            let x = cx - num_w / 2;
+            let y = MARGIN_TOP + rows as i32 * STRIDE + 8;
+            draw_digital_number(&mut svg, col_counts[col as usize], x, y, dig_w, dig_h, dig_gap, grey);
         }
     }
 
