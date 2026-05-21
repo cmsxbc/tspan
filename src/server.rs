@@ -560,7 +560,7 @@ th{font-size:12px;color:#666;font-weight:600}
 .year-svg{margin-top:10px}
 .overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 .overview-grid .stat-card{box-shadow:none;border:1px solid #eee;padding:12px}
-.pattern-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:start}
+.pattern-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:center}
 @media(max-width:900px){.pattern-grid{grid-template-columns:1fr}}
 .year-graphs-wrap{margin-top:15px}
 #year-graphs .card{margin-bottom:15px}
