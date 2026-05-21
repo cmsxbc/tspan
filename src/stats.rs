@@ -129,15 +129,28 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         mean_usage_hr: human_readable_time(mean_usage),
     };
 
-    let past_n_names = vec![
-        ("1 week", 7 * 86400),
-        ("2 weeks", 14 * 86400),
-        ("1 month", 30 * 86400),
-        ("3 months", 90 * 86400),
-        ("6 months", 180 * 86400),
-        ("1 year", 365 * 86400),
-        ("All Time", total_duration),
+    let mut past_n_names: Vec<(String, i64)> = vec![
+        ("1 week".to_string(), 7 * 86400),
+        ("2 weeks".to_string(), 14 * 86400),
+        ("1 month".to_string(), 30 * 86400),
     ];
+    if total_duration >= 90 * 86400 {
+        past_n_names.push(("3 months".to_string(), 90 * 86400));
+    }
+    if total_duration >= 180 * 86400 {
+        past_n_names.push(("6 months".to_string(), 180 * 86400));
+    }
+    if total_duration >= 365 * 86400 {
+        past_n_names.push(("1 year".to_string(), 365 * 86400));
+    }
+    let year_secs = 365 * 86400;
+    let mut multi_year = 2 * year_secs;
+    while total_duration >= multi_year {
+        let years = multi_year / year_secs;
+        past_n_names.push((format!("{} years", years), multi_year));
+        multi_year *= 2;
+    }
+    past_n_names.push(("All Time".to_string(), total_duration));
 
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
