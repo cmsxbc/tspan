@@ -28,7 +28,7 @@ fn color_idx_for_seconds(seconds: i64) -> i32 {
 }
 
 fn append_segment_digit(svg: &mut String, digit: i32, x: i32, y: i32, w: i32, h: i32, color: &str) {
-    let t = 4;
+    let t = 3;
     let pad = 1;
     let hh = h / 2;
     let seg_on: [bool; 7] = match digit {
@@ -125,7 +125,7 @@ pub fn generate_svg_calendar(
         ((total_days as f64).sqrt().ceil() as i64).max(7)
     };
 
-    let right_margin = if year.is_some() { 40 } else { 20 };
+    let right_margin = if year.is_some() { 26 } else { 20 };
     let bottom_margin = if year.is_some() { 48 } else { 30 };
     let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + right_margin;
     let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + bottom_margin;
@@ -305,8 +305,8 @@ pub fn generate_svg_calendar(
 
     // Weekly / daily-of-week counts (year view only) — seven-segment style
     if year.is_some() {
-        let dig_w = 16;
-        let dig_h = 26;
+        let dig_w = 10;
+        let dig_h = 18;
         let dig_gap = 2;
         let seg_color = "#1f2328";
         for row in 0..rows {
@@ -319,14 +319,14 @@ pub fn generate_svg_calendar(
             let cx = MARGIN_LEFT + col as i32 * STRIDE + BORDER + INNER / 2;
             let num_w = if col_counts[col as usize] >= 10 { dig_w * 2 + dig_gap } else { dig_w };
             let x = cx - num_w / 2;
-            let y = MARGIN_TOP + rows as i32 * STRIDE + 8;
+            let y = MARGIN_TOP + rows as i32 * STRIDE + 6;
             draw_digital_number(&mut svg, col_counts[col as usize], x, y, dig_w, dig_h, dig_gap, seg_color);
         }
     }
 
     // Legend
     let legend_y = if year.is_some() {
-        MARGIN_TOP + rows as i32 * STRIDE + 30
+        MARGIN_TOP + rows as i32 * STRIDE + 32
     } else {
         svg_height - 20
     };
