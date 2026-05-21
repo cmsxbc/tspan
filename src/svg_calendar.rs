@@ -113,7 +113,7 @@ pub fn generate_svg_calendar(
         ((total_days as f64).sqrt().ceil() as i64).max(7)
     };
 
-    let right_margin = if year.is_some() { 36 } else { 20 };
+    let right_margin = if year.is_some() { 40 } else { 20 };
     let bottom_margin = if year.is_some() { 48 } else { 30 };
     let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + right_margin;
     let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + bottom_margin;
