@@ -596,6 +596,9 @@ th{font-size:12px;color:#666;font-weight:600}
   <div class="card">
     <h2>Activity Graph (All Time)</h2>
     <div id="svg-all-time"></div>
+  </div>
+</div>
+<div class="card">
   <div class="year-graphs-wrap">
     <button class="btn btn-gen" onclick="toggleYearGraphs()" id="year-toggle-btn" style="margin-bottom:10px;">Show Year Graphs ▼</button>
     <div id="year-graphs" style="display:none;"></div>
