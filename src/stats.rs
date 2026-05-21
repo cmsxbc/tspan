@@ -23,6 +23,7 @@ pub struct PastNStat {
     pub ratio: f64,
     pub times: i64,
     pub day_ratio: f64,
+    pub days: i64,
     pub mean_usage: i64,
 }
 
@@ -150,13 +151,15 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         )?;
         let mean = if times > 0 { seconds / times } else { 0 };
         let ratio = calc_ratio(seconds, secs);
-        let day_ratio = calc_ratio(times, (secs / 86400).max(1));
+        let days = secs / 86400;
+        let day_ratio = calc_ratio(times, days.max(1));
         past_n.push(PastNStat {
             name: name.to_string(),
             seconds,
             ratio,
             times,
             day_ratio,
+            days,
             mean_usage: mean,
         });
     }
