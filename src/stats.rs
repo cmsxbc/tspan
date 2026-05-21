@@ -503,3 +503,88 @@ pub fn compute_session_distribution(
         buckets,
     })
 }
+
+#[derive(Debug, Serialize)]
+pub struct WeekdayWeekendStats {
+    pub weekday_total_seconds: i64,
+    pub weekday_times: i64,
+    pub weekday_mean_seconds: i64,
+    pub weekend_total_seconds: i64,
+    pub weekend_times: i64,
+    pub weekend_mean_seconds: i64,
+    pub weekday_total_hr: String,
+    pub weekday_mean_hr: String,
+    pub weekend_total_hr: String,
+    pub weekend_mean_hr: String,
+}
+
+pub fn compute_weekday_weekend_stats(
+    conn: &mut Connection,
+    client_id: &str,
+    alias: &str,
+    command: &str,
+) -> anyhow::Result<WeekdayWeekendStats> {
+    let mut conditions = vec!["status = 'completed'".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let sql = format!(
+        "SELECT CASE WHEN strftime('%w', start_time, 'unixepoch', 'localtime') IN ('0','6') THEN 'weekend' ELSE 'weekday' END as day_type,
+                COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE {}
+         GROUP BY day_type",
+        wc
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| {
+            let day_type: String = row.get(0)?;
+            let total_seconds: i64 = row.get(1)?;
+            let total_times: i64 = row.get(2)?;
+            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+            Ok((day_type, total_seconds, total_times, mean))
+        },
+    )?.collect::<Result<Vec<_>, _>>()?;
+
+    let mut weekday_total = 0i64;
+    let mut weekday_times = 0i64;
+    let mut weekend_total = 0i64;
+    let mut weekend_times = 0i64;
+    for (dt, total, times, _) in rows {
+        if dt == "weekday" {
+            weekday_total = total;
+            weekday_times = times;
+        } else {
+            weekend_total = total;
+            weekend_times = times;
+        }
+    }
+
+    Ok(WeekdayWeekendStats {
+        weekday_total_seconds: weekday_total,
+        weekday_times,
+        weekday_mean_seconds: if weekday_times > 0 { weekday_total / weekday_times } else { 0 },
+        weekend_total_seconds: weekend_total,
+        weekend_times,
+        weekend_mean_seconds: if weekend_times > 0 { weekend_total / weekend_times } else { 0 },
+        weekday_total_hr: human_readable_time(weekday_total),
+        weekday_mean_hr: human_readable_time(if weekday_times > 0 { weekday_total / weekday_times } else { 0 }),
+        weekend_total_hr: human_readable_time(weekend_total),
+        weekend_mean_hr: human_readable_time(if weekend_times > 0 { weekend_total / weekend_times } else { 0 }),
+    })
+}

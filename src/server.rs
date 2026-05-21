@@ -120,6 +120,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats/by-alias", get(api_get_stats_by_alias))
         .route("/stats/by-command", get(api_get_stats_by_command))
         .route("/stats/session-distribution", get(api_get_session_distribution))
+        .route("/stats/weekday-weekend", get(api_get_weekday_weekend_stats))
         .route("/stats/summary.md", get(api_get_summary_md))
         .route("/daily-data", get(api_get_daily_data))
         .route("/svg", get(api_get_svg))
@@ -349,6 +350,25 @@ async fn api_get_session_distribution(
     Ok(Json(data))
 }
 
+async fn api_get_weekday_weekend_stats(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<stats::WeekdayWeekendStats>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_weekday_weekend_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Weekday/weekend stats error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
 async fn api_get_summary_md(
     Query(q): Query<FilterQuery>,
     headers: HeaderMap,
@@ -498,6 +518,7 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
+<div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
@@ -569,6 +590,7 @@ async function loadAll() {
     loadAliasStats(),
     loadCommandStats(),
     loadSessionDistribution(),
+    loadWeekdayWeekendStats(),
     loadRecords()
   ]);
 }
@@ -730,6 +752,20 @@ async function loadSessionDistribution() {
   });
   html += '</div>';
   document.getElementById('session-dist').innerHTML = html;
+}
+async function loadWeekdayWeekendStats() {
+  const r = await fetch('/api/stats/weekday-weekend?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  if(data.weekday_times === 0 && data.weekend_times === 0) {
+    document.getElementById('wd-we-stats').innerHTML = '<p style="color:#666;">No data</p>';
+    return;
+  }
+  let html = '<table><tr><th></th><th>Total</th><th>Times</th><th>Mean</th></tr>';
+  html += '<tr><td>Weekday</td><td>' + data.weekday_total_hr + '</td><td>' + data.weekday_times + '</td><td>' + data.weekday_mean_hr + '</td></tr>';
+  html += '<tr><td>Weekend</td><td>' + data.weekend_total_hr + '</td><td>' + data.weekend_times + '</td><td>' + data.weekend_mean_hr + '</td></tr>';
+  html += '</table>';
+  document.getElementById('wd-we-stats').innerHTML = html;
 }
 async function loadRecords() {
   recState.perPage = parseInt(document.getElementById('filter-perpage').value);
