@@ -504,8 +504,31 @@ function buildParams(obj) {
   if(f.command) p.set('command', f.command);
   return p;
 }
+function readUrlFilters() {
+  const params = new URLSearchParams(location.search);
+  const client_id = params.get('client_id') || '';
+  const alias = params.get('alias') || '';
+  const command = params.get('command') || '';
+  const per_page = params.get('per_page') || '';
+  if(client_id) document.getElementById('filter-client').value = client_id;
+  if(alias) document.getElementById('filter-alias').value = alias;
+  if(command) document.getElementById('filter-command').value = command;
+  if(per_page) document.getElementById('filter-perpage').value = per_page;
+}
+function writeUrlFilters() {
+  const f = getFilters();
+  const params = new URLSearchParams();
+  if(f.client_id) params.set('client_id', f.client_id);
+  if(f.alias) params.set('alias', f.alias);
+  if(f.command) params.set('command', f.command);
+  const per_page = document.getElementById('filter-perpage').value;
+  if(per_page && per_page !== '50') params.set('per_page', per_page);
+  const qs = params.toString();
+  history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+}
 async function applyFilters() {
   recState.page = 1;
+  writeUrlFilters();
   await loadAll();
 }
 function updateGroupStatsVisibility() {
@@ -693,7 +716,10 @@ async function loadRecords() {
 }
 function goPage(p) { recState.page = p; loadRecords(); }
 document.getElementById('filter-command').addEventListener('keypress', e => { if(e.key==='Enter') { applyFilters(); } });
-loadClients().then(() => loadAliases().then(() => loadAll()));
+loadClients().then(() => loadAliases().then(() => {
+  readUrlFilters();
+  loadAll();
+}));
 </script>
 </body></html>"#;
 
