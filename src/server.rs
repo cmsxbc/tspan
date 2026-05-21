@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::{AuthConfig, check_api_auth, check_web_auth};
 use crate::db::{self, DbPool};
 use crate::stats::{self, compute_stats};
-use crate::svg_calendar::{generate_all_years_svgs, generate_svg_calendar};
+use crate::svg_calendar::{generate_all_years_svgs, generate_svg_calendar, scheme_by_name, SCHEME_HEATMAP};
 use crate::markdown::generate_markdown_report;
 
 #[derive(Clone)]
@@ -61,6 +61,7 @@ pub struct FilterQuery {
     pub client_id: Option<String>,
     pub alias: Option<String>,
     pub command: Option<String>,
+    pub color_scheme: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -451,8 +452,8 @@ async fn api_get_summary_md(
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
-    let all_svg = generate_svg_calendar(&daily, None);
-    let year_svgs = generate_all_years_svgs(&daily);
+    let all_svg = generate_svg_calendar(&daily, None, SCHEME_HEATMAP);
+    let year_svgs = generate_all_years_svgs(&daily, SCHEME_HEATMAP);
 
     let md = generate_markdown_report(&stats, &all_svg, &year_svgs);
 
@@ -577,6 +578,11 @@ th{font-size:12px;color:#666;font-weight:600}
       <option value="100">100 / page</option>
       <option value="200">200 / page</option>
     </select>
+    <select id="filter-scheme" onchange="changeColorScheme(this.value)" style="padding:6px 10px;border-radius:4px;border:1px solid #d0d7de;">
+      <option value="heatmap">热力图</option>
+      <option value="traffic">交通灯</option>
+      <option value="ocean">海洋</option>
+    </select>
     <button class="btn btn-gen" onclick="applyFilters()">Search</button>
   </div>
 </div>
@@ -611,6 +617,19 @@ th{font-size:12px;color:#666;font-weight:600}
 </div>
 <script>
 let recState = {page:1, perPage:50};
+const COLOR_SCHEMES = {
+  heatmap: { name: '热力图', empty: '#ebedf0', low: '#9be9a8', medium: '#f9d71c', high: '#e5534b' },
+  traffic: { name: '交通灯', empty: '#ebedf0', low: '#2da44e', medium: '#f9d71c', high: '#cf222e' },
+  ocean:   { name: '海洋',   empty: '#f6f8fa', low: '#a5d8ff', medium: '#74c0fc', high: '#339af0' }
+};
+function getColorScheme() {
+  const saved = localStorage.getItem('wyd_color_scheme');
+  return COLOR_SCHEMES[saved] || COLOR_SCHEMES.heatmap;
+}
+function changeColorScheme(name) {
+  localStorage.setItem('wyd_color_scheme', name);
+  loadAll();
+}
 function getFilters() {
   return {
     client_id: document.getElementById('filter-client').value,
@@ -625,6 +644,8 @@ function buildParams(obj) {
   if(f.client_id) p.set('client_id', f.client_id);
   if(f.alias) p.set('alias', f.alias);
   if(f.command) p.set('command', f.command);
+  const scheme = localStorage.getItem('wyd_color_scheme');
+  if(scheme) p.set('color_scheme', scheme);
   return p;
 }
 function readUrlFilters() {
@@ -637,6 +658,8 @@ function readUrlFilters() {
   if(alias) document.getElementById('filter-alias').value = alias;
   if(command) document.getElementById('filter-command').value = command;
   if(per_page) document.getElementById('filter-perpage').value = per_page;
+  const savedScheme = localStorage.getItem('wyd_color_scheme');
+  if(savedScheme) document.getElementById('filter-scheme').value = savedScheme;
 }
 function writeUrlFilters() {
   const f = getFilters();
@@ -792,21 +815,21 @@ async function loadStats() {
   const maxRatio = Math.max(...s.past_n.map(p => p.ratio), baseRatio);
   const maxDayRatio = Math.max(...s.past_n.map(p => p.day_ratio), baseDayRatio);
   const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), baseMean);
-  function buildBar(val, maxVal, baseVal, isAllTime) {
-    if (maxVal <= 0) return '<div style="flex:1;height:14px;background:#ebedf0;border-radius:4px;"></div>';
+  function buildBar(val, maxVal, baseVal, isAllTime, scheme) {
+    if (maxVal <= 0) return '<div style="flex:1;height:14px;background:' + scheme.empty + ';border-radius:4px;"></div>';
     const trackPct = baseVal / maxVal * 100;
     const barPct = val / maxVal * 100;
     if (isAllTime) {
       return '<div style="flex:1;position:relative;height:14px;">' +
-             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:#f9d71c;border-radius:4px;"></div></div>';
+             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:' + scheme.medium + ';border-radius:4px;"></div></div>';
     } else if (val <= baseVal) {
       return '<div style="flex:1;position:relative;height:14px;">' +
-             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:#ebedf0;border-radius:4px;">' +
-             '<div style="width:' + (val / baseVal * 100).toFixed(1) + '%;height:100%;background:#9be9a8;border-radius:4px;"></div></div></div>';
+             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:' + scheme.empty + ';border-radius:4px;">' +
+             '<div style="width:' + (val / baseVal * 100).toFixed(1) + '%;height:100%;background:' + scheme.low + ';border-radius:4px;"></div></div></div>';
     } else {
       return '<div style="flex:1;position:relative;height:14px;">' +
-             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:#f9d71c;border-radius:4px 0 0 4px;"></div>' +
-             '<div style="position:absolute;left:' + trackPct.toFixed(1) + '%;top:0;width:' + (barPct - trackPct).toFixed(1) + '%;height:100%;background:#e5534b;border-radius:0 4px 4px 0;"></div>' +
+             '<div style="position:absolute;left:0;top:0;width:' + trackPct.toFixed(1) + '%;height:100%;background:' + scheme.medium + ';border-radius:4px 0 0 4px;"></div>' +
+             '<div style="position:absolute;left:' + trackPct.toFixed(1) + '%;top:0;width:' + (barPct - trackPct).toFixed(1) + '%;height:100%;background:' + scheme.high + ';border-radius:0 4px 4px 0;"></div>' +
              '</div>';
     }
   }
@@ -816,7 +839,7 @@ async function loadStats() {
     html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.ratio, maxRatio, baseRatio, isAllTime) +
+      buildBar(p.ratio, maxRatio, baseRatio, isAllTime, getColorScheme()) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
@@ -824,13 +847,13 @@ async function loadStats() {
       '<td>' + p.days + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.day_ratio, maxDayRatio, baseDayRatio, isAllTime) +
+      buildBar(p.day_ratio, maxDayRatio, baseDayRatio, isAllTime, getColorScheme()) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.day_ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.mean_usage, maxMean, baseMean, isAllTime) +
+      buildBar(p.mean_usage, maxMean, baseMean, isAllTime, getColorScheme()) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + fmtDur(p.mean_usage) + '</span>' +
       '</div>' +
       '</td></tr>';
@@ -1029,12 +1052,13 @@ async function loadHourlyHeatmap() {
     row.forEach((seconds, hour) => {
       const x = labelW + hour * (cell + gap);
       const y = 40 + dow * (cell + gap);
-      let color = '#ebedf0';
+      const scheme = getColorScheme();
+      let color = scheme.empty;
       if(seconds > 0 && data.max_seconds > 0) {
         const ratio = seconds / data.max_seconds;
-        if(ratio < 0.33) color = '#9be9a8';
-        else if(ratio < 0.66) color = '#f9d71c';
-        else color = '#e5534b';
+        if(ratio < 0.33) color = scheme.low;
+        else if(ratio < 0.66) color = scheme.medium;
+        else color = scheme.high;
       }
       const tooltip = days[dow] + ' ' + hour + ':00: ' + fmtDur(seconds);
       svg += '<rect x="' + x + '" y="' + y + '" width="' + cell + '" height="' + cell + '" fill="' + color + '" rx="4"><title>' + tooltip + '</title></rect>';
@@ -1384,8 +1408,9 @@ async fn api_get_svg(
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
-    let all_time = generate_svg_calendar(&daily, None);
-    let years = generate_all_years_svgs(&daily);
+    let scheme = scheme_by_name(q.color_scheme.as_deref().unwrap_or("heatmap"));
+    let all_time = generate_svg_calendar(&daily, None, scheme);
+    let years = generate_all_years_svgs(&daily, scheme);
     Ok(Json(SvgResp { all_time, years }))
 }
 

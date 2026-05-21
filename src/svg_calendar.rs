@@ -8,23 +8,70 @@ const STRIDE: i32 = INNER + BORDER * 2 + PADDING;
 const MARGIN_LEFT: i32 = 40;
 const MARGIN_TOP: i32 = 30;
 
-fn color_for_seconds(seconds: i64) -> &'static str {
-    if seconds == 0 {
-        "#f6f8fa"
-    } else if seconds < 1800 {
-        "#9be9a8"
-    } else if seconds < 3600 {
-        "#f9d71c"
-    } else {
-        "#e5534b"
+#[derive(Clone, Copy)]
+pub struct ColorScheme {
+    pub name: &'static str,
+    pub base: &'static str,
+    pub empty: &'static str,
+    pub low: &'static str,
+    pub medium: &'static str,
+    pub high: &'static str,
+}
+
+impl ColorScheme {
+    pub fn color_for_seconds(&self, seconds: i64) -> &'static str {
+        if seconds == 0 {
+            self.empty
+        } else if seconds < 1800 {
+            self.low
+        } else if seconds < 3600 {
+            self.medium
+        } else {
+            self.high
+        }
+    }
+
+    pub fn color_idx_for_seconds(&self, seconds: i64) -> i32 {
+        if seconds == 0 { 0 }
+        else if seconds < 1800 { 1 }
+        else if seconds < 3600 { 2 }
+        else { 3 }
     }
 }
 
-fn color_idx_for_seconds(seconds: i64) -> i32 {
-    if seconds == 0 { 0 }
-    else if seconds < 1800 { 1 }
-    else if seconds < 3600 { 2 }
-    else { 3 }
+pub const SCHEME_HEATMAP: ColorScheme = ColorScheme {
+    name: "热力图",
+    base: "#1f2328",
+    empty: "#f6f8fa",
+    low: "#9be9a8",
+    medium: "#f9d71c",
+    high: "#e5534b",
+};
+
+pub const SCHEME_TRAFFIC: ColorScheme = ColorScheme {
+    name: "交通灯",
+    base: "#f6f8fa",
+    empty: "#ebedf0",
+    low: "#2da44e",
+    medium: "#f9d71c",
+    high: "#cf222e",
+};
+
+pub const SCHEME_OCEAN: ColorScheme = ColorScheme {
+    name: "海洋",
+    base: "#0d1117",
+    empty: "#f6f8fa",
+    low: "#a5d8ff",
+    medium: "#74c0fc",
+    high: "#339af0",
+};
+
+pub fn scheme_by_name(name: &str) -> ColorScheme {
+    match name {
+        "traffic" => SCHEME_TRAFFIC,
+        "ocean" => SCHEME_OCEAN,
+        _ => SCHEME_HEATMAP,
+    }
 }
 
 const DIGIT_PATTERNS: [[u8; 5]; 10] = [
@@ -75,6 +122,7 @@ fn month_label(month: u32) -> &'static str {
 pub fn generate_svg_calendar(
     data: &[(String, i64)],
     year: Option<i32>,
+    scheme: ColorScheme,
 ) -> String {
     if data.is_empty() {
         return "<svg width=\"100\" height=\"50\" xmlns=\"http://www.w3.org/2000/svg\"><text x=\"10\" y=\"30\" font-size=\"12\" fill=\"#666\">No data</text></svg>".to_string();
@@ -168,7 +216,7 @@ pub fn generate_svg_calendar(
             }
             let day_str = date.format("%Y-%m-%d").to_string();
             let seconds = day_map.get(&day_str).copied().unwrap_or(0);
-            let color_idx = color_idx_for_seconds(seconds);
+            let color_idx = scheme.color_idx_for_seconds(seconds);
             if seconds > 0 {
                 col_counts[col as usize] += 1;
                 row_counts[row as usize] += 1;
@@ -177,7 +225,7 @@ pub fn generate_svg_calendar(
         }
     }
 
-    let base_color = "#1f2328";
+    let base_color = scheme.base;
     let mut prev_month = 0u32;
 
     // Phase 1: inner cell + inner borders + corners
@@ -186,7 +234,7 @@ pub fn generate_svg_calendar(
             let cell = &grid[row as usize][col as usize];
             if cell.is_none() { continue; }
             let (color_idx, day_str, seconds, date) = cell.as_ref().unwrap();
-            let cell_color = color_for_seconds(*seconds);
+            let cell_color = scheme.color_for_seconds(*seconds);
 
             let base_x = MARGIN_LEFT + col as i32 * STRIDE;
             let base_y = MARGIN_TOP + row as i32 * STRIDE;
@@ -297,7 +345,7 @@ pub fn generate_svg_calendar(
     if year.is_some() {
         let pixel = 3;
         let dig_gap = 2;
-        let seg_color = "#1f2328";
+        let seg_color = scheme.base;
         let dig_w = 5 * pixel;
         let dig_h = 5 * pixel;
         for row in 0..rows {
@@ -325,7 +373,7 @@ pub fn generate_svg_calendar(
     let levels = [(0, "0s"), (1, "<30m"), (1800, "30-60m"), (3600, ">60m")];
     for (i, (secs, label)) in levels.iter().enumerate() {
         let x = legend_x + i as i32 * 60;
-        let color = color_for_seconds(*secs);
+        let color = scheme.color_for_seconds(*secs);
         svg.push_str(&format!(
             r#"<rect x="{}" y="{}" width="10" height="10" rx="2" fill="{}"/><text x="{}" y="{}" font-size="11" fill="{}">{}</text>"#,
             x, legend_y, color, x + 14, legend_y + 9, grey, label
@@ -336,7 +384,7 @@ pub fn generate_svg_calendar(
     svg
 }
 
-pub fn generate_all_years_svgs(data: &[(String, i64)]) -> Vec<(String, String)> {
+pub fn generate_all_years_svgs(data: &[(String, i64)], scheme: ColorScheme) -> Vec<(String, String)> {
     let mut years_data: std::collections::HashMap<i32, Vec<(String, i64)>> = std::collections::HashMap::new();
     for (day, secs) in data {
         if let Ok(date) = NaiveDate::parse_from_str(day, "%Y-%m-%d") {
@@ -349,7 +397,7 @@ pub fn generate_all_years_svgs(data: &[(String, i64)]) -> Vec<(String, String)> 
 
     years.into_iter()
         .map(|y| {
-            let svg = generate_svg_calendar(&years_data[&y], Some(y));
+            let svg = generate_svg_calendar(&years_data[&y], Some(y), scheme);
             (y.to_string(), svg)
         })
         .collect()
