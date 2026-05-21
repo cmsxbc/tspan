@@ -136,6 +136,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         ("3 months", 90 * 86400),
         ("6 months", 180 * 86400),
         ("1 year", 365 * 86400),
+        ("All Time", total_duration),
     ];
 
     let mut past_n = Vec::new();

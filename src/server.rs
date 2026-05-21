@@ -788,15 +788,15 @@ async function loadStats() {
     '</div>';
   const avgRatio = s.past_n.reduce((sum, p) => sum + p.ratio, 0) / (s.past_n.length || 1);
   const avgDayRatio = s.past_n.reduce((sum, p) => sum + p.day_ratio, 0) / (s.past_n.length || 1);
-  const maxRatio = Math.max(...s.past_n.map(p => p.ratio), 1);
-  const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), 1);
+  const baseRatio = s.total.total_ratio || 1;
+  const baseMean = s.total.mean_usage || 1;
   let html = '';
   s.past_n.forEach(p => {
     const ratioColor = p.ratio >= avgRatio ? '#2da44e' : '#666';
     const dayRatioColor = p.day_ratio >= avgDayRatio ? '#2da44e' : '#666';
-    const ratioPct = Math.min(100, (p.ratio / maxRatio) * 100).toFixed(1);
+    const ratioPct = ((p.ratio / baseRatio) * 100).toFixed(1);
     const dayRatioPct = Math.min(100, p.day_ratio).toFixed(1);
-    const meanPct = Math.min(100, (p.mean_usage / maxMean) * 100).toFixed(1);
+    const meanPct = ((p.mean_usage / baseMean) * 100).toFixed(1);
     html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
