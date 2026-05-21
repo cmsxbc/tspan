@@ -10,7 +10,7 @@ const MARGIN_TOP: i32 = 20;
 
 fn color_for_seconds(seconds: i64) -> &'static str {
     if seconds == 0 {
-        "#ebedf0"
+        "#f6f8fa"
     } else if seconds < 1800 {
         "#9be9a8"
     } else if seconds < 3600 {
