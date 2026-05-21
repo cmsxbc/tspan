@@ -6,7 +6,7 @@ const BORDER: i32 = 5;
 const PADDING: i32 = 4;
 const STRIDE: i32 = INNER + BORDER * 2 + PADDING;
 const MARGIN_LEFT: i32 = 40;
-const MARGIN_TOP: i32 = 20;
+const MARGIN_TOP: i32 = 30;
 
 fn color_for_seconds(seconds: i64) -> &'static str {
     if seconds == 0 {
@@ -77,7 +77,7 @@ pub fn generate_svg_calendar(
         ((total_days as f64).sqrt().ceil() as i64).max(7)
     };
 
-    let right_margin = if year.is_some() { 22 } else { 20 };
+    let right_margin = if year.is_some() { 30 } else { 20 };
     let bottom_margin = if year.is_some() { 48 } else { 30 };
     let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + right_margin;
     let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + bottom_margin;
@@ -93,8 +93,8 @@ pub fn generate_svg_calendar(
     };
     let dark = "#333333";
     svg.push_str(&format!(
-        r#"<text x="{}" y="{}" font-size="14" font-weight="bold" fill="{}">{}</text>"#,
-        MARGIN_LEFT, MARGIN_TOP - 5, dark, title
+        r#"<text x="5" y="18" font-size="18" font-weight="bold" fill="{}">{}</text>"#,
+        dark, title
     ));
 
     let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -103,7 +103,7 @@ pub fn generate_svg_calendar(
         if i % 2 == 0 {
             let y = MARGIN_TOP + i as i32 * STRIDE + INNER / 2 + BORDER + 4;
             svg.push_str(&format!(
-                r#"<text x="5" y="{}" font-size="9" fill="{}">{}</text>"#,
+                r#"<text x="5" y="{}" font-size="12" fill="{}">{}</text>"#,
                 y, grey, wd
             ));
         }
@@ -156,8 +156,8 @@ pub fn generate_svg_calendar(
             if year.is_some() && date.day() == 1 && date.month() != prev_month {
                 prev_month = date.month();
                 svg.push_str(&format!(
-                    r#"<text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
-                    base_x + BORDER, MARGIN_TOP - 5, grey, month_label(date.month())
+                    r#"<text x="{}" y="{}" font-size="12" fill="{}">{}</text>"#,
+                    base_x + BORDER, MARGIN_TOP - 4, grey, month_label(date.month())
                 ));
             }
 
@@ -261,7 +261,7 @@ pub fn generate_svg_calendar(
             let y = MARGIN_TOP + row as i32 * STRIDE + INNER / 2 + BORDER + 4;
             let x = MARGIN_LEFT + cols as i32 * STRIDE + 2;
             svg.push_str(&format!(
-                r#"<text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
+                r#"<text x="{}" y="{}" font-size="12" fill="{}">{}</text>"#,
                 x, y, grey, row_counts[row as usize]
             ));
         }
@@ -269,7 +269,7 @@ pub fn generate_svg_calendar(
             let x = MARGIN_LEFT + col as i32 * STRIDE + BORDER + INNER / 2;
             let y = MARGIN_TOP + rows as i32 * STRIDE + 10;
             svg.push_str(&format!(
-                r#"<text x="{}" y="{}" font-size="9" fill="{}" text-anchor="middle">{}</text>"#,
+                r#"<text x="{}" y="{}" font-size="12" fill="{}" text-anchor="middle">{}</text>"#,
                 x, y, grey, col_counts[col as usize]
             ));
         }
@@ -287,7 +287,7 @@ pub fn generate_svg_calendar(
         let x = legend_x + i as i32 * 60;
         let color = color_for_seconds(*secs);
         svg.push_str(&format!(
-            r#"<rect x="{}" y="{}" width="10" height="10" rx="2" fill="{}"/><text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
+            r#"<rect x="{}" y="{}" width="10" height="10" rx="2" fill="{}"/><text x="{}" y="{}" font-size="11" fill="{}">{}</text>"#,
             x, legend_y, color, x + 14, legend_y + 9, grey, label
         ));
     }
