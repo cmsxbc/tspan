@@ -666,7 +666,6 @@ async function loadAll() {
   updateGroupStatsVisibility();
   document.getElementById('overview-stats').innerHTML = '';
   await loadStats();
-  await loadStreaks();
   await Promise.all([
     loadSvg(),
     loadClientStats(),
@@ -716,14 +715,40 @@ function fmtDur(s) {
   return out.trim();
 }
 async function loadStats() {
-  const r = await fetch('/api/stats?' + buildParams({}).toString());
-  if(!r.ok) return;
-  const s = await r.json();
+  const [r1, r2] = await Promise.all([
+    fetch('/api/stats?' + buildParams({}).toString()),
+    fetch('/api/stats/streaks?' + buildParams({}).toString())
+  ]);
+  if(!r1.ok) return;
+  const s = await r1.json();
+  const streaks = r2.ok ? await r2.json() : { current_streak: 0, max_streak: 0, last_active_time_hr: '-' };
   const maxInt = s.interval.max_interval || 1;
   const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
   const meanPct = Math.min(100, Math.round((s.interval.mean_interval / maxInt) * 100));
   const dayRatioPct = Math.min(100, s.total.total_day_ratio).toFixed(1);
   document.getElementById('overview-stats').innerHTML =
+    '<div class="stat-card" style="border-top:3px solid #8250df;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🕐</div>' +
+    '<div class="stat-value" style="font-size:14px;">' + streaks.last_active_time_hr + '</div>' +
+    '<div class="stat-label">Last Active</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.interval.current_interval_hr + '</div>' +
+    '<div class="stat-label">Current Interval</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
+    '<div class="stat-value">' + streaks.current_streak + '</div>' +
+    '<div class="stat-label">Current Streak</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🗓</div>' +
+    '<div class="stat-value">' + s.total.total_day_ratio.toFixed(2) + '%</div>' +
+    '<div class="stat-label">Day Ratio</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + dayRatioPct + '%"></div></div>' +
+    '</div>' +
     '<div class="stat-card" style="border-top:3px solid #0969da;">' +
     '<div style="font-size:18px;margin-bottom:2px;">📅</div>' +
     '<div class="stat-value">' + s.total.total_days + '</div>' +
@@ -744,23 +769,16 @@ async function loadStats() {
     '<div class="stat-value" style="font-size:18px;">' + s.total.mean_usage_hr + '</div>' +
     '<div class="stat-label">Mean / Session</div>' +
     '</div>' +
-    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
-    '<div style="font-size:18px;margin-bottom:2px;">🗓</div>' +
-    '<div class="stat-value">' + s.total.total_day_ratio.toFixed(2) + '%</div>' +
-    '<div class="stat-label">Day Ratio</div>' +
-    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + dayRatioPct + '%"></div></div>' +
-    '</div>' +
-    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
-    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
-    '<div class="stat-value" style="font-size:18px;">' + s.interval.current_interval_hr + '</div>' +
-    '<div class="stat-label">Current Interval</div>' +
-    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
-    '</div>' +
     '<div class="stat-card" style="border-top:3px solid #cf222e;">' +
     '<div style="font-size:18px;margin-bottom:2px;">📊</div>' +
     '<div class="stat-value" style="font-size:18px;">' + s.interval.max_interval_hr + '</div>' +
     '<div class="stat-label">Max Interval</div>' +
     '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:100%;background:#cf222e;"></div></div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🏆</div>' +
+    '<div class="stat-value">' + streaks.max_streak + '</div>' +
+    '<div class="stat-label">Max Streak</div>' +
     '</div>' +
     '<div class="stat-card" style="border-top:3px solid #2da44e;">' +
     '<div style="font-size:18px;margin-bottom:2px;">⏱</div>' +
@@ -938,26 +956,7 @@ async function loadWeekdayWeekendStats() {
   document.getElementById('wd-we-stats').innerHTML = svg;
 }
 async function loadStreaks() {
-  const r = await fetch('/api/stats/streaks?' + buildParams({}).toString());
-  if(!r.ok) return;
-  const data = await r.json();
-  const html =
-    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
-    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
-    '<div class="stat-value">' + data.current_streak + '</div>' +
-    '<div class="stat-label">Current Streak</div>' +
-    '</div>' +
-    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
-    '<div style="font-size:18px;margin-bottom:2px;">🏆</div>' +
-    '<div class="stat-value">' + data.max_streak + '</div>' +
-    '<div class="stat-label">Max Streak</div>' +
-    '</div>' +
-    '<div class="stat-card" style="border-top:3px solid #8250df;">' +
-    '<div style="font-size:18px;margin-bottom:2px;">🕐</div>' +
-    '<div class="stat-value" style="font-size:14px;">' + data.last_active_time_hr + '</div>' +
-    '<div class="stat-label">Last Active</div>' +
-    '</div>';
-  document.getElementById('overview-stats').insertAdjacentHTML('beforeend', html);
+  // Streaks are now rendered inside loadStats() to control card ordering.
 }
 async function loadMonthlyTrend() {
   const r = await fetch('/api/stats/monthly-trend?' + buildParams({}).toString());
