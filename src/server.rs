@@ -558,7 +558,7 @@ th{font-size:12px;color:#666;font-weight:600}
 .code{font-family:monospace;background:#f6f8fa;padding:2px 6px;border-radius:3px;font-size:12px}
 #svg-all-time{margin-top:10px}
 .year-svg{margin-top:10px}
-.overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.overview-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 .overview-grid .stat-card{box-shadow:none;border:1px solid #eee;padding:12px}
 .pattern-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:center}
 @media(max-width:900px){.pattern-grid{grid-template-columns:1fr}}
@@ -588,13 +588,14 @@ th{font-size:12px;color:#666;font-weight:600}
     <button class="btn btn-gen" onclick="applyFilters()">Search</button>
   </div>
 </div>
-<div class="card">
-  <h2>Overview</h2>
-  <div id="overview-stats" class="overview-grid"></div>
-</div>
-<div class="card">
-  <h2>Activity Graph (All Time)</h2>
-  <div id="svg-all-time"></div>
+<div style="display:grid;grid-template-columns:1fr 2fr;gap:20px;">
+  <div class="card">
+    <h2>Overview</h2>
+    <div id="overview-stats" class="overview-grid"></div>
+  </div>
+  <div class="card">
+    <h2>Activity Graph (All Time)</h2>
+    <div id="svg-all-time"></div>
   <div class="year-graphs-wrap">
     <button class="btn btn-gen" onclick="toggleYearGraphs()" id="year-toggle-btn" style="margin-bottom:10px;">Show Year Graphs ▼</button>
     <div id="year-graphs" style="display:none;"></div>
