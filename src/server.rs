@@ -601,7 +601,7 @@ th{font-size:12px;color:#666;font-weight:600}
   </div>
 </div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
-<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th style="min-width:130px;">Ratio</th><th>Times</th><th>Days</th><th style="min-width:130px;">Day Ratio</th><th style="min-width:130px;">Mean</th></tr></thead><tbody></tbody></table></div>
+<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th style="min-width:130px;">Ratio</th><th>Sessions</th><th>Days</th><th style="min-width:130px;">Day Ratio</th><th style="min-width:130px;">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
 <div class="card" id="card-by-alias"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
 <div class="card" id="card-by-command"><h2>Stats by Command</h2><div id="command-stats"></div></div>

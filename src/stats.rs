@@ -144,22 +144,22 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         let mut p2 = param_refs.clone();
         p2.push(&start);
         let wc2 = c2.join(" AND ");
-        let (seconds, times): (i64, i64) = conn.query_row(
-            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*) FROM records WHERE {}", wc2),
+        let (seconds, times, active_days): (i64, i64, i64) = conn.query_row(
+            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), COALESCE(COUNT(DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch')), 0) FROM records WHERE {}", wc2),
             rusqlite::params_from_iter(&p2),
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         let mean = if times > 0 { seconds / times } else { 0 };
         let ratio = calc_ratio(seconds, secs);
         let days = secs / 86400;
-        let day_ratio = calc_ratio(times, days.max(1));
+        let day_ratio = calc_ratio(active_days, days.max(1));
         past_n.push(PastNStat {
             name: name.to_string(),
             seconds,
             ratio,
             times,
             day_ratio,
-            days,
+            days: active_days,
             mean_usage: mean,
         });
     }
