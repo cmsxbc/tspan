@@ -5,6 +5,7 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub struct TotalStats {
     pub total_days: i64,
+    pub active_days: i64,
     pub total_seconds: i64,
     pub total_times: i64,
     pub mean_usage: i64,
@@ -97,10 +98,10 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     }
     let wc = conditions.join(" AND ");
 
-    let (total_seconds, total_times, earliest_start): (i64, i64, Option<i64>) = conn.query_row(
-        &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time) FROM records WHERE {}", wc),
+    let (total_seconds, total_times, earliest_start, active_days): (i64, i64, Option<i64>, i64) = conn.query_row(
+        &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time), COALESCE(COUNT(DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch')), 0) FROM records WHERE {}", wc),
         rusqlite::params_from_iter(&param_refs),
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
 
     let earliest_start = earliest_start.unwrap_or(today);
@@ -108,7 +109,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     let total_days = total_duration / 86400;
     let mean_usage = if total_times > 0 { total_seconds / total_times } else { 0 };
     let total_ratio = calc_ratio(total_seconds, total_duration);
-    let total_day_ratio = calc_ratio(total_times, total_days.max(1));
+    let total_day_ratio = calc_ratio(active_days, total_days.max(1));
 
     let from_date = DateTime::from_timestamp(earliest_start, 0)
         .map(|d| d.format("%Y-%m-%d").to_string())
@@ -116,6 +117,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
 
     let total = TotalStats {
         total_days,
+        active_days,
         total_seconds,
         total_times,
         mean_usage,
@@ -601,6 +603,7 @@ pub struct StreakStats {
     pub current_streak: i64,
     pub max_streak: i64,
     pub last_active_date: String,
+    pub last_active_time_hr: String,
 }
 
 pub fn compute_streaks(
@@ -637,7 +640,7 @@ pub fn compute_streaks(
     )?.collect::<Result<Vec<_>, _>>()?;
 
     if days.is_empty() {
-        return Ok(StreakStats { current_streak: 0, max_streak: 0, last_active_date: "-".to_string() });
+        return Ok(StreakStats { current_streak: 0, max_streak: 0, last_active_date: "-".to_string(), last_active_time_hr: "-".to_string() });
     }
 
     let mut max_streak = 1i64;
@@ -659,10 +662,21 @@ pub fn compute_streaks(
         max_streak = current_streak;
     }
 
+    let last_active_time: Option<i64> = conn.query_row(
+        &format!("SELECT MAX(start_time) FROM records WHERE {}", wc),
+        rusqlite::params_from_iter(&param_refs),
+        |row| row.get(0),
+    )?;
+    let last_active_time_hr = last_active_time
+        .and_then(|ts| DateTime::from_timestamp(ts, 0))
+        .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "-".to_string());
+
     Ok(StreakStats {
         current_streak,
         max_streak,
         last_active_date: days.last().unwrap().clone(),
+        last_active_time_hr,
     })
 }
 

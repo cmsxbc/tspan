@@ -722,26 +722,49 @@ async function loadStats() {
   const maxInt = s.interval.max_interval || 1;
   const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
   const meanPct = Math.min(100, Math.round((s.interval.mean_interval / maxInt) * 100));
+  const dayRatioPct = Math.min(100, s.total.total_day_ratio).toFixed(1);
   document.getElementById('overview-stats').innerHTML =
-    '<div class="stat-card"><div class="stat-value">' + s.total.total_days + '</div><div class="stat-label">Total Days</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + s.total.total_times + '</div><div class="stat-label">Total Times</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + s.total.total_seconds_hr + '</div><div class="stat-label">Total Duration</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + s.total.mean_usage_hr + '</div><div class="stat-label">Mean / Session</div></div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">📅</div>' +
+    '<div class="stat-value">' + s.total.total_days + '</div>' +
+    '<div class="stat-label">Total Days</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🚀</div>' +
+    '<div class="stat-value">' + s.total.total_times + '</div>' +
+    '<div class="stat-label">Total Sessions</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">⏳</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.total.total_seconds_hr + '</div>' +
+    '<div class="stat-label">Total Duration</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">⚡</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.total.mean_usage_hr + '</div>' +
+    '<div class="stat-label">Mean / Session</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🗓</div>' +
+    '<div class="stat-value">' + s.total.total_day_ratio.toFixed(2) + '%</div>' +
+    '<div class="stat-label">Day Ratio</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + dayRatioPct + '%"></div></div>' +
+    '</div>' +
     '<div class="stat-card" style="border-top:3px solid #0969da;">' +
     '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
-    '<div class="stat-value" style="font-size:20px;">' + s.interval.current_interval_hr + '</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.interval.current_interval_hr + '</div>' +
     '<div class="stat-label">Current Interval</div>' +
     '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
     '</div>' +
     '<div class="stat-card" style="border-top:3px solid #cf222e;">' +
     '<div style="font-size:18px;margin-bottom:2px;">📊</div>' +
-    '<div class="stat-value" style="font-size:20px;">' + s.interval.max_interval_hr + '</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.interval.max_interval_hr + '</div>' +
     '<div class="stat-label">Max Interval</div>' +
     '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:100%;background:#cf222e;"></div></div>' +
     '</div>' +
     '<div class="stat-card" style="border-top:3px solid #2da44e;">' +
     '<div style="font-size:18px;margin-bottom:2px;">⏱</div>' +
-    '<div class="stat-value" style="font-size:20px;">' + s.interval.mean_interval_hr + '</div>' +
+    '<div class="stat-value" style="font-size:18px;">' + s.interval.mean_interval_hr + '</div>' +
     '<div class="stat-label">Mean Interval</div>' +
     '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + meanPct + '%;background:#2da44e;"></div></div>' +
     '</div>';
@@ -919,9 +942,21 @@ async function loadStreaks() {
   if(!r.ok) return;
   const data = await r.json();
   const html =
-    '<div class="stat-card"><div class="stat-value">' + data.current_streak + '</div><div class="stat-label">Current Streak</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + data.max_streak + '</div><div class="stat-label">Max Streak</div></div>' +
-    '<div class="stat-card"><div class="stat-value" style="font-size:16px;">' + data.last_active_date + '</div><div class="stat-label">Last Active</div></div>';
+    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
+    '<div class="stat-value">' + data.current_streak + '</div>' +
+    '<div class="stat-label">Current Streak</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #d4a017;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🏆</div>' +
+    '<div class="stat-value">' + data.max_streak + '</div>' +
+    '<div class="stat-label">Max Streak</div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #8250df;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🕐</div>' +
+    '<div class="stat-value" style="font-size:14px;">' + data.last_active_time_hr + '</div>' +
+    '<div class="stat-label">Last Active</div>' +
+    '</div>';
   document.getElementById('overview-stats').insertAdjacentHTML('beforeend', html);
 }
 async function loadMonthlyTrend() {
