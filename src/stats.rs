@@ -150,7 +150,12 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         past_n_names.push((format!("{} years", years), multi_year));
         multi_year *= 2;
     }
-    past_n_names.push(("All Time".to_string(), total_duration));
+    let all_time_label = if total_duration < 365 * 86400 {
+        format!("All Time ({:.1} months)", total_duration as f64 / (30.0 * 86400.0))
+    } else {
+        format!("All Time ({:.1} years)", total_duration as f64 / (365.0 * 86400.0))
+    };
+    past_n_names.push((all_time_label, total_duration));
 
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
