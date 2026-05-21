@@ -817,7 +817,8 @@ async function loadStats() {
   const maxRatio = Math.max(...s.past_n.map(p => p.ratio), baseRatio);
   const maxDayRatio = Math.max(...s.past_n.map(p => p.day_ratio), baseDayRatio);
   const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), baseMean);
-  function buildBar(val, maxVal, baseVal, isAllTime, scheme) {
+  const scheme = getColorScheme();
+  function buildBar(val, maxVal, baseVal, isAllTime, sc) {
     if (maxVal <= 0) return '<div style="flex:1;height:14px;background:' + scheme.empty + ';border-radius:4px;"></div>';
     const trackPct = baseVal / maxVal * 100;
     const barPct = val / maxVal * 100;
@@ -841,7 +842,7 @@ async function loadStats() {
     html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.ratio, maxRatio, baseRatio, isAllTime, getColorScheme()) +
+      buildBar(p.ratio, maxRatio, baseRatio, isAllTime, scheme) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
@@ -849,13 +850,14 @@ async function loadStats() {
       '<td>' + p.days + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.day_ratio, maxDayRatio, baseDayRatio, isAllTime, getColorScheme()) +
+      '<div style="flex:1;height:14px;background:' + scheme.empty + ';border-radius:4px;">' +
+      '<div style="width:' + Math.min(100, p.day_ratio).toFixed(1) + '%;height:100%;background:' + (isAllTime ? scheme.medium : (p.day_ratio <= baseDayRatio ? scheme.low : scheme.high)) + ';border-radius:4px;"></div></div>' +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.day_ratio.toFixed(2) + '%</span>' +
       '</div>' +
       '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
-      buildBar(p.mean_usage, maxMean, baseMean, isAllTime, getColorScheme()) +
+      buildBar(p.mean_usage, maxMean, baseMean, isAllTime, scheme) +
       '<span style="font-size:11px;color:#666;white-space:nowrap;">' + fmtDur(p.mean_usage) + '</span>' +
       '</div>' +
       '</td></tr>';
