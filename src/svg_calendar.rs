@@ -1,7 +1,10 @@
 use chrono::{Datelike, NaiveDate};
 
-const CELL_SIZE: i32 = 15;
-const CELL_GAP: i32 = 4;
+// Exact parameters from reference/calendarimg.sh/calendarimg.sh
+const INNER: i32 = 15;
+const BORDER: i32 = 5;
+const PADDING: i32 = 4;
+const STRIDE: i32 = INNER + BORDER * 2 + PADDING;
 const MARGIN_LEFT: i32 = 40;
 const MARGIN_TOP: i32 = 20;
 
@@ -56,20 +59,16 @@ pub fn generate_svg_calendar(
         (first, today.max(last))
     };
 
-    // Build day -> seconds map
     let mut day_map = std::collections::HashMap::new();
     for (day, secs) in data {
         day_map.insert(day.clone(), *secs);
     }
 
-    // Compute grid dimensions
     let total_days = (end_date - start_date).num_days() + 1;
     let cols = if year.is_some() {
-        // For yearly view: always 7 rows, compute cols based on year days
         let offset = start_date.weekday().num_days_from_monday() as i64;
         (total_days + offset + 6) / 7
     } else {
-        // For all-time view: approximate square
         let rows = ((total_days as f64).sqrt().ceil() as i64).max(7);
         (total_days + rows - 1) / rows
     };
@@ -78,15 +77,14 @@ pub fn generate_svg_calendar(
         ((total_days as f64).sqrt().ceil() as i64).max(7)
     };
 
-    let svg_width = MARGIN_LEFT + cols as i32 * (CELL_SIZE + CELL_GAP) + 20;
-    let svg_height = MARGIN_TOP + rows as i32 * (CELL_SIZE + CELL_GAP) + 30;
+    let svg_width = MARGIN_LEFT + cols as i32 * STRIDE - PADDING + 20;
+    let svg_height = MARGIN_TOP + rows as i32 * STRIDE - PADDING + 30;
 
     let mut svg = format!(
         r#"<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">"#,
         svg_width, svg_height
     );
 
-    // Title
     let title = match year {
         Some(y) => format!("{}", y),
         None => "All Time".to_string(),
@@ -97,12 +95,11 @@ pub fn generate_svg_calendar(
         MARGIN_LEFT, MARGIN_TOP - 5, dark, title
     ));
 
-    // Weekday labels
     let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let grey = "#666666";
     for (i, wd) in weekdays.iter().enumerate() {
         if i % 2 == 0 {
-            let y = MARGIN_TOP + i as i32 * (CELL_SIZE + CELL_GAP) + CELL_SIZE / 2 + 4;
+            let y = MARGIN_TOP + i as i32 * STRIDE + INNER / 2 + BORDER + 4;
             svg.push_str(&format!(
                 r#"<text x="5" y="{}" font-size="9" fill="{}">{}</text>"#,
                 y, grey, wd
@@ -110,8 +107,7 @@ pub fn generate_svg_calendar(
         }
     }
 
-    // Build grid
-    let gap_half = CELL_GAP / 2;
+    // Build grid: (col, row) -> (color_idx, day_str, seconds, date)
     let mut grid: Vec<Vec<Option<(i32, String, i64, NaiveDate)>>> = vec![vec![None; rows as usize]; cols as usize];
     for col in 0..cols {
         for row in 0..rows {
@@ -135,83 +131,118 @@ pub fn generate_svg_calendar(
         }
     }
 
-    let border_color = "#1f2328";
-
-    // Phase 1: Draw base cells
+    let base_color = "#1f2328";
     let mut prev_month = 0u32;
+
+    // Phase 1: inner cell + inner borders + corners
     for col in 0..cols {
         for row in 0..rows {
             let cell = &grid[col as usize][row as usize];
             if cell.is_none() { continue; }
-            let (_, day_str, seconds, date) = cell.as_ref().unwrap();
+            let (color_idx, day_str, seconds, date) = cell.as_ref().unwrap();
+            let cell_color = color_for_seconds(*seconds);
 
-            let base_x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
-            let base_y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
+            let base_x = MARGIN_LEFT + col as i32 * STRIDE;
+            let base_y = MARGIN_TOP + row as i32 * STRIDE;
 
             if year.is_some() && date.day() == 1 && date.month() != prev_month {
                 prev_month = date.month();
                 svg.push_str(&format!(
                     r#"<text x="{}" y="{}" font-size="9" fill="{}">{}</text>"#,
-                    base_x, MARGIN_TOP - 5, grey, month_label(date.month())
+                    base_x + BORDER, MARGIN_TOP - 5, grey, month_label(date.month())
                 ));
             }
 
-            let color = color_for_seconds(*seconds);
-            let tooltip = format!("{}: {}s ({})", day_str, seconds, crate::stats::human_readable_time(*seconds));
-            svg.push_str(&format!(
-                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" rx="0">
-                    <title>{}</title>
-                </rect>"#,
-                base_x, base_y, CELL_SIZE, CELL_SIZE, color, tooltip
-            ));
-        }
-    }
-
-    // Phase 2: Draw gap fillers (right, bottom, corner)
-    for col in 0..cols {
-        for row in 0..rows {
-            let cell = &grid[col as usize][row as usize];
-            if cell.is_none() { continue; }
-            let (color_idx, _, seconds, _) = cell.as_ref().unwrap();
-            let base_x = MARGIN_LEFT + col as i32 * (CELL_SIZE + CELL_GAP);
-            let base_y = MARGIN_TOP + row as i32 * (CELL_SIZE + CELL_GAP);
-            let cell_color = color_for_seconds(*seconds);
-
+            // Neighbor checks
+            let up_same = if row > 0 {
+                if let Some((nidx, _, _, _)) = &grid[col as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
+            } else { false };
             let right_same = if col + 1 < cols {
-                if let Some((ridx, _, _, _)) = &grid[(col+1) as usize][row as usize] { *ridx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][row as usize] { *nidx == *color_idx } else { false }
             } else { false };
             let down_same = if row + 1 < rows {
-                if let Some((didx, _, _, _)) = &grid[col as usize][(row+1) as usize] { *didx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[col as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+            } else { false };
+            let left_same = if col > 0 {
+                if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][row as usize] { *nidx == *color_idx } else { false }
             } else { false };
 
-            // Right gap
-            let right_color = if right_same { cell_color } else { border_color };
+            // Inner cell
+            let tooltip = format!("{}: {}s ({})", day_str, seconds, crate::stats::human_readable_time(*seconds));
             svg.push_str(&format!(
-                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
-                base_x + CELL_SIZE, base_y, CELL_GAP, CELL_SIZE, right_color
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"><title>{}</title></rect>"#,
+                base_x + BORDER, base_y + BORDER, INNER, INNER, cell_color, tooltip
             ));
 
-            // Bottom gap
-            let down_color = if down_same { cell_color } else { border_color };
+            // Inner borders (EDGE part in reference)
+            let top_color = if up_same { cell_color } else { base_color };
             svg.push_str(&format!(
                 r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
-                base_x, base_y + CELL_SIZE, CELL_SIZE, CELL_GAP, down_color
+                base_x + BORDER, base_y, INNER, BORDER, top_color
+            ));
+            let right_color = if right_same { cell_color } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + BORDER + INNER, base_y + BORDER, BORDER, INNER, right_color
+            ));
+            let bottom_color = if down_same { cell_color } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + BORDER, base_y + BORDER + INNER, INNER, BORDER, bottom_color
+            ));
+            let left_color = if left_same { cell_color } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x, base_y + BORDER, BORDER, INNER, left_color
             ));
 
-            // Corner gap
-            let corner_color = if right_same && down_same {
-                let br_same = if col + 1 < cols && row + 1 < rows {
-                    if let Some((br_idx, _, _, _)) = &grid[(col+1) as usize][(row+1) as usize] {
-                        *br_idx == *color_idx
-                    } else { false }
+            // Corners (draw_corner logic from reference)
+            // corner 0 = top-left
+            let c0 = if up_same && left_same {
+                let ul_up = if col > 0 && row > 0 {
+                    if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
                 } else { false };
-                if br_same { cell_color } else { border_color }
-            } else {
-                border_color
-            };
+                if ul_up { cell_color } else { base_color }
+            } else { base_color };
             svg.push_str(&format!(
                 r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
-                base_x + CELL_SIZE, base_y + CELL_SIZE, CELL_GAP, CELL_GAP, corner_color
+                base_x, base_y, BORDER, BORDER, c0
+            ));
+
+            // corner 1 = top-right
+            let c1 = if up_same && right_same {
+                let ur_up = if col + 1 < cols && row > 0 {
+                    if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
+                } else { false };
+                if ur_up { cell_color } else { base_color }
+            } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + BORDER + INNER, base_y, BORDER, BORDER, c1
+            ));
+
+            // corner 2 = bottom-right
+            let c2 = if right_same && down_same {
+                let br_down = if col + 1 < cols && row + 1 < rows {
+                    if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+                } else { false };
+                if br_down { cell_color } else { base_color }
+            } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x + BORDER + INNER, base_y + BORDER + INNER, BORDER, BORDER, c2
+            ));
+
+            // corner 3 = bottom-left
+            let c3 = if down_same && left_same {
+                let dl_down = if col > 0 && row + 1 < rows {
+                    if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+                } else { false };
+                if dl_down { cell_color } else { base_color }
+            } else { base_color };
+            svg.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+                base_x, base_y + BORDER + INNER, BORDER, BORDER, c3
             ));
         }
     }
@@ -242,7 +273,7 @@ pub fn generate_all_years_svgs(data: &[(String, i64)]) -> Vec<(String, String)> 
     }
 
     let mut years: Vec<i32> = years_data.keys().copied().collect();
-    years.sort_by(|a, b| b.cmp(a)); // Descending
+    years.sort_by(|a, b| b.cmp(a));
 
     years.into_iter()
         .map(|y| {
