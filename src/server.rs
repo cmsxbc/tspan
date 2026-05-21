@@ -601,7 +601,7 @@ th{font-size:12px;color:#666;font-weight:600}
   </div>
 </div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
-<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th style="min-width:130px;">Day Ratio</th><th style="min-width:130px;">Mean</th></tr></thead><tbody></tbody></table></div>
+<div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th style="min-width:130px;">Ratio</th><th>Times</th><th style="min-width:130px;">Day Ratio</th><th style="min-width:130px;">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
 <div class="card" id="card-by-alias"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
 <div class="card" id="card-by-command"><h2>Stats by Command</h2><div id="command-stats"></div></div>
@@ -747,14 +747,25 @@ async function loadStats() {
     '</div>';
   const avgRatio = s.past_n.reduce((sum, p) => sum + p.ratio, 0) / (s.past_n.length || 1);
   const avgDayRatio = s.past_n.reduce((sum, p) => sum + p.day_ratio, 0) / (s.past_n.length || 1);
+  const maxRatio = Math.max(...s.past_n.map(p => p.ratio), 1);
   const maxMean = Math.max(...s.past_n.map(p => p.mean_usage), 1);
   let html = '';
   s.past_n.forEach(p => {
     const ratioColor = p.ratio >= avgRatio ? '#2da44e' : '#666';
     const dayRatioColor = p.day_ratio >= avgDayRatio ? '#2da44e' : '#666';
+    const ratioPct = Math.min(100, (p.ratio / maxRatio) * 100).toFixed(1);
     const dayRatioPct = Math.min(100, p.day_ratio).toFixed(1);
     const meanPct = Math.min(100, (p.mean_usage / maxMean) * 100).toFixed(1);
-    html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td><td style="color:' + ratioColor + '">' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td>' +
+    html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td>' +
+      '<td>' +
+      '<div style="display:flex;align-items:center;gap:6px;">' +
+      '<div style="flex:1;background:#ebedf0;border-radius:4px;height:14px;overflow:hidden;">' +
+      '<div style="width:' + ratioPct + '%;height:100%;background:' + ratioColor + ';border-radius:4px;"></div>' +
+      '</div>' +
+      '<span style="font-size:11px;color:#666;white-space:nowrap;">' + p.ratio.toFixed(2) + '%</span>' +
+      '</div>' +
+      '</td>' +
+      '<td>' + p.times + '</td>' +
       '<td>' +
       '<div style="display:flex;align-items:center;gap:6px;">' +
       '<div style="flex:1;background:#ebedf0;border-radius:4px;height:14px;overflow:hidden;">' +
