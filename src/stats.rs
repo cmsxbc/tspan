@@ -395,3 +395,111 @@ pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, comma
     )?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
+#[derive(Debug, Serialize)]
+pub struct SessionBucket {
+    pub label: String,
+    pub count: i64,
+    pub pct: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionDistribution {
+    pub max_seconds: i64,
+    pub min_seconds: i64,
+    pub median_seconds: i64,
+    pub mean_seconds: i64,
+    pub total_sessions: i64,
+    pub max_seconds_hr: String,
+    pub min_seconds_hr: String,
+    pub median_seconds_hr: String,
+    pub mean_seconds_hr: String,
+    pub buckets: Vec<SessionBucket>,
+}
+
+pub fn compute_session_distribution(
+    conn: &mut Connection,
+    client_id: &str,
+    alias: &str,
+    command: &str,
+) -> anyhow::Result<SessionDistribution> {
+    let mut conditions = vec!["status = 'completed' AND duration_seconds IS NOT NULL".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT duration_seconds FROM records WHERE {} ORDER BY duration_seconds ASC",
+        wc
+    ))?;
+    let durations: Vec<i64> = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| row.get(0),
+    )?.collect::<Result<Vec<_>, _>>()?;
+
+    let total = durations.len() as i64;
+    if total == 0 {
+        return Ok(SessionDistribution {
+            max_seconds: 0, min_seconds: 0, median_seconds: 0, mean_seconds: 0, total_sessions: 0,
+            max_seconds_hr: human_readable_time(0),
+            min_seconds_hr: human_readable_time(0),
+            median_seconds_hr: human_readable_time(0),
+            mean_seconds_hr: human_readable_time(0),
+            buckets: vec![],
+        });
+    }
+
+    let max_s = *durations.last().unwrap();
+    let min_s = *durations.first().unwrap();
+    let sum: i64 = durations.iter().sum();
+    let mean_s = sum / total;
+    let median_s = if total % 2 == 1 {
+        durations[((total - 1) / 2) as usize]
+    } else {
+        (durations[(total / 2 - 1) as usize] + durations[(total / 2) as usize]) / 2
+    };
+
+    let buckets_def = [
+        (0, 300, "<5 min"),
+        (300, 900, "5–15 min"),
+        (900, 1800, "15–30 min"),
+        (1800, 3600, "30–60 min"),
+        (3600, 7200, "1–2 h"),
+        (7200, 14400, "2–4 h"),
+        (14400, i64::MAX, ">4 h"),
+    ];
+    let mut buckets = vec![];
+    for (lo, hi, label) in &buckets_def {
+        let cnt = durations.iter().filter(|&&d| d >= *lo && d < *hi).count() as i64;
+        buckets.push(SessionBucket {
+            label: label.to_string(),
+            count: cnt,
+            pct: if total > 0 { (cnt as f64 / total as f64) * 100.0 } else { 0.0 },
+        });
+    }
+
+    Ok(SessionDistribution {
+        max_seconds: max_s,
+        min_seconds: min_s,
+        median_seconds: median_s,
+        mean_seconds: mean_s,
+        total_sessions: total,
+        max_seconds_hr: human_readable_time(max_s),
+        min_seconds_hr: human_readable_time(min_s),
+        median_seconds_hr: human_readable_time(median_s),
+        mean_seconds_hr: human_readable_time(mean_s),
+        buckets,
+    })
+}

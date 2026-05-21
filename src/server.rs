@@ -119,6 +119,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats/by-client", get(api_get_stats_by_client))
         .route("/stats/by-alias", get(api_get_stats_by_alias))
         .route("/stats/by-command", get(api_get_stats_by_command))
+        .route("/stats/session-distribution", get(api_get_session_distribution))
         .route("/stats/summary.md", get(api_get_summary_md))
         .route("/daily-data", get(api_get_daily_data))
         .route("/svg", get(api_get_svg))
@@ -329,6 +330,25 @@ async fn api_get_stats_by_command(
     Ok(Json(data))
 }
 
+async fn api_get_session_distribution(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<stats::SessionDistribution>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_session_distribution(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Session distribution error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
 async fn api_get_summary_md(
     Query(q): Query<FilterQuery>,
     headers: HeaderMap,
@@ -478,6 +498,7 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
+<div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
 <div class="card" id="card-by-alias"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
@@ -547,6 +568,7 @@ async function loadAll() {
     loadClientStats(),
     loadAliasStats(),
     loadCommandStats(),
+    loadSessionDistribution(),
     loadRecords()
   ]);
 }
@@ -681,6 +703,33 @@ async function loadCommandStats() {
   }
   html += '</table>';
   document.getElementById('command-stats').innerHTML = html;
+}
+async function loadSessionDistribution() {
+  const r = await fetch('/api/stats/session-distribution?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  if(data.total_sessions === 0) {
+    document.getElementById('session-dist').innerHTML = '<p style="color:#666;">No data</p>';
+    return;
+  }
+  let html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
+  html += '<div class="stat-card"><div class="stat-value">' + data.max_seconds_hr + '</div><div class="stat-label">Max</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + data.min_seconds_hr + '</div><div class="stat-label">Min</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + data.median_seconds_hr + '</div><div class="stat-label">Median</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + data.mean_seconds_hr + '</div><div class="stat-label">Mean</div></div>';
+  html += '</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+  data.buckets.forEach(b => {
+    html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;">';
+    html += '<span style="width:70px;color:#666;">' + b.label + '</span>';
+    html += '<div style="flex:1;background:#ebedf0;border-radius:4px;height:16px;overflow:hidden;">';
+    html += '<div style="width:' + Math.min(100, b.pct.toFixed(1)) + '%;height:100%;background:#0969da;border-radius:4px;"></div>';
+    html += '</div>';
+    html += '<span style="width:70px;text-align:right;color:#333;">' + b.count + ' (' + b.pct.toFixed(1) + '%)</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('session-dist').innerHTML = html;
 }
 async function loadRecords() {
   recState.perPage = parseInt(document.getElementById('filter-perpage').value);
