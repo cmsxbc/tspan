@@ -588,3 +588,73 @@ pub fn compute_weekday_weekend_stats(
         weekend_mean_hr: human_readable_time(if weekend_times > 0 { weekend_total / weekend_times } else { 0 }),
     })
 }
+
+#[derive(Debug, Serialize)]
+pub struct StreakStats {
+    pub current_streak: i64,
+    pub max_streak: i64,
+    pub last_active_date: String,
+}
+
+pub fn compute_streaks(
+    conn: &mut Connection,
+    client_id: &str,
+    alias: &str,
+    command: &str,
+) -> anyhow::Result<StreakStats> {
+    let mut conditions = vec!["status = 'completed' AND duration_seconds > 0".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT date(start_time, 'unixepoch', 'localtime') as day FROM records WHERE {} ORDER BY day ASC",
+        wc
+    ))?;
+    let days: Vec<String> = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| row.get(0),
+    )?.collect::<Result<Vec<_>, _>>()?;
+
+    if days.is_empty() {
+        return Ok(StreakStats { current_streak: 0, max_streak: 0, last_active_date: "-".to_string() });
+    }
+
+    let mut max_streak = 1i64;
+    let mut current_streak = 1i64;
+
+    for i in 1..days.len() {
+        let prev = chrono::NaiveDate::parse_from_str(&days[i - 1], "%Y-%m-%d").unwrap();
+        let curr = chrono::NaiveDate::parse_from_str(&days[i], "%Y-%m-%d").unwrap();
+        if (curr - prev).num_days() == 1 {
+            current_streak += 1;
+        } else {
+            if current_streak > max_streak {
+                max_streak = current_streak;
+            }
+            current_streak = 1;
+        }
+    }
+    if current_streak > max_streak {
+        max_streak = current_streak;
+    }
+
+    Ok(StreakStats {
+        current_streak,
+        max_streak,
+        last_active_date: days.last().unwrap().clone(),
+    })
+}

@@ -121,6 +121,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats/by-command", get(api_get_stats_by_command))
         .route("/stats/session-distribution", get(api_get_session_distribution))
         .route("/stats/weekday-weekend", get(api_get_weekday_weekend_stats))
+        .route("/stats/streaks", get(api_get_streaks))
         .route("/stats/summary.md", get(api_get_summary_md))
         .route("/daily-data", get(api_get_daily_data))
         .route("/svg", get(api_get_svg))
@@ -369,6 +370,25 @@ async fn api_get_weekday_weekend_stats(
     Ok(Json(data))
 }
 
+async fn api_get_streaks(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<stats::StreakStats>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_streaks(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Streaks error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
 async fn api_get_summary_md(
     Query(q): Query<FilterQuery>,
     headers: HeaderMap,
@@ -518,6 +538,7 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
+<div class="card"><h2>Streaks</h2><div id="streak-stats"></div></div>
 <div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
@@ -591,6 +612,7 @@ async function loadAll() {
     loadCommandStats(),
     loadSessionDistribution(),
     loadWeekdayWeekendStats(),
+    loadStreaks(),
     loadRecords()
   ]);
 }
@@ -766,6 +788,17 @@ async function loadWeekdayWeekendStats() {
   html += '<tr><td>Weekend</td><td>' + data.weekend_total_hr + '</td><td>' + data.weekend_times + '</td><td>' + data.weekend_mean_hr + '</td></tr>';
   html += '</table>';
   document.getElementById('wd-we-stats').innerHTML = html;
+}
+async function loadStreaks() {
+  const r = await fetch('/api/stats/streaks?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  let html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">';
+  html += '<div class="stat-card"><div class="stat-value">' + data.current_streak + '</div><div class="stat-label">Current Streak (days)</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + data.max_streak + '</div><div class="stat-label">Max Streak (days)</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + data.last_active_date + '</div><div class="stat-label">Last Active</div></div>';
+  html += '</div>';
+  document.getElementById('streak-stats').innerHTML = html;
 }
 async function loadRecords() {
   recState.perPage = parseInt(document.getElementById('filter-perpage').value);
