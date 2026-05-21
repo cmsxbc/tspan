@@ -155,7 +155,7 @@ pub fn generate_svg_calendar(
                 let offset = start_date.weekday().num_days_from_monday() as i64;
                 col * 7 + row as i64 - offset
             } else {
-                row * cols + col as i64
+                col * rows + row as i64
             };
             if day_idx < 0 || day_idx >= total_days {
                 continue;
