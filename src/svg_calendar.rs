@@ -145,17 +145,17 @@ pub fn generate_svg_calendar(
         }
     }
 
-    // Build grid: (col, row) -> (color_idx, day_str, seconds, date)
-    let mut grid: Vec<Vec<Option<(i32, String, i64, NaiveDate)>>> = vec![vec![None; rows as usize]; cols as usize];
+    // Build grid: (row, col) -> (color_idx, day_str, seconds, date)
+    let mut grid: Vec<Vec<Option<(i32, String, i64, NaiveDate)>>> = vec![vec![None; cols as usize]; rows as usize];
     let mut col_counts = vec![0i32; cols as usize];
     let mut row_counts = vec![0i32; rows as usize];
-    for col in 0..cols {
-        for row in 0..rows {
+    for row in 0..rows {
+        for col in 0..cols {
             let day_idx = if year.is_some() {
                 let offset = start_date.weekday().num_days_from_monday() as i64;
-                col * 7 + row as i64 - offset
+                row * cols + col as i64 - offset
             } else {
-                col + row as i64 * cols
+                row * cols + col as i64
             };
             if day_idx < 0 || day_idx >= total_days {
                 continue;
@@ -171,7 +171,7 @@ pub fn generate_svg_calendar(
                 col_counts[col as usize] += 1;
                 row_counts[row as usize] += 1;
             }
-            grid[col as usize][row as usize] = Some((color_idx, day_str, seconds, date));
+            grid[row as usize][col as usize] = Some((color_idx, day_str, seconds, date));
         }
     }
 
@@ -179,9 +179,9 @@ pub fn generate_svg_calendar(
     let mut prev_month = 0u32;
 
     // Phase 1: inner cell + inner borders + corners
-    for col in 0..cols {
-        for row in 0..rows {
-            let cell = &grid[col as usize][row as usize];
+    for row in 0..rows {
+        for col in 0..cols {
+            let cell = &grid[row as usize][col as usize];
             if cell.is_none() { continue; }
             let (color_idx, day_str, seconds, date) = cell.as_ref().unwrap();
             let cell_color = color_for_seconds(*seconds);
@@ -199,16 +199,16 @@ pub fn generate_svg_calendar(
 
             // Neighbor checks
             let up_same = if row > 0 {
-                if let Some((nidx, _, _, _)) = &grid[col as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[(row-1) as usize][col as usize] { *nidx == *color_idx } else { false }
             } else { false };
             let right_same = if col + 1 < cols {
-                if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][row as usize] { *nidx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[row as usize][(col+1) as usize] { *nidx == *color_idx } else { false }
             } else { false };
             let down_same = if row + 1 < rows {
-                if let Some((nidx, _, _, _)) = &grid[col as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[(row+1) as usize][col as usize] { *nidx == *color_idx } else { false }
             } else { false };
             let left_same = if col > 0 {
-                if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][row as usize] { *nidx == *color_idx } else { false }
+                if let Some((nidx, _, _, _)) = &grid[row as usize][(col-1) as usize] { *nidx == *color_idx } else { false }
             } else { false };
 
             // Inner cell
@@ -244,7 +244,7 @@ pub fn generate_svg_calendar(
             // corner 0 = top-left
             let c0 = if up_same && left_same {
                 let ul_up = if col > 0 && row > 0 {
-                    if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
+                    if let Some((nidx, _, _, _)) = &grid[(row-1) as usize][(col-1) as usize] { *nidx == *color_idx } else { false }
                 } else { false };
                 if ul_up { cell_color } else { base_color }
             } else { base_color };
@@ -256,7 +256,7 @@ pub fn generate_svg_calendar(
             // corner 1 = top-right
             let c1 = if up_same && right_same {
                 let ur_up = if col + 1 < cols && row > 0 {
-                    if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][(row-1) as usize] { *nidx == *color_idx } else { false }
+                    if let Some((nidx, _, _, _)) = &grid[(row-1) as usize][(col+1) as usize] { *nidx == *color_idx } else { false }
                 } else { false };
                 if ur_up { cell_color } else { base_color }
             } else { base_color };
@@ -268,7 +268,7 @@ pub fn generate_svg_calendar(
             // corner 2 = bottom-right
             let c2 = if right_same && down_same {
                 let br_down = if col + 1 < cols && row + 1 < rows {
-                    if let Some((nidx, _, _, _)) = &grid[(col+1) as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+                    if let Some((nidx, _, _, _)) = &grid[(row+1) as usize][(col+1) as usize] { *nidx == *color_idx } else { false }
                 } else { false };
                 if br_down { cell_color } else { base_color }
             } else { base_color };
@@ -280,7 +280,7 @@ pub fn generate_svg_calendar(
             // corner 3 = bottom-left
             let c3 = if down_same && left_same {
                 let dl_down = if col > 0 && row + 1 < rows {
-                    if let Some((nidx, _, _, _)) = &grid[(col-1) as usize][(row+1) as usize] { *nidx == *color_idx } else { false }
+                    if let Some((nidx, _, _, _)) = &grid[(row+1) as usize][(col-1) as usize] { *nidx == *color_idx } else { false }
                 } else { false };
                 if dl_down { cell_color } else { base_color }
             } else { base_color };
