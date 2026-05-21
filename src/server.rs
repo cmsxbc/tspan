@@ -557,6 +557,10 @@ th{font-size:12px;color:#666;font-weight:600}
 .code{font-family:monospace;background:#f6f8fa;padding:2px 6px;border-radius:3px;font-size:12px}
 #svg-all-time{margin-top:10px}
 .year-svg{margin-top:10px}
+.trend-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.trend-grid{grid-template-columns:1fr}}
+.year-graphs-wrap{margin-top:15px}
+#year-graphs .card{margin-bottom:15px}
 </style></head><body>
 <div class="nav"><a href="/">Home</a><a href="/admin">Admin</a></div>
 <h1>Activity Stats</h1>
@@ -576,10 +580,21 @@ th{font-size:12px;color:#666;font-weight:600}
 </div>
 <div id="stats-cards" class="stats-grid"></div>
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
-<div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
-<div id="year-graphs"></div>
-<div class="card"><h2>Hourly Heatmap</h2><div id="hourly-heatmap"></div></div>
-<div class="card"><h2>Monthly Trend</h2><div id="monthly-trend"></div></div>
+<div class="card">
+  <h2>Activity Graph (All Time)</h2>
+  <div id="svg-all-time"></div>
+  <div class="year-graphs-wrap">
+    <button class="btn btn-gen" onclick="toggleYearGraphs()" id="year-toggle-btn" style="margin-bottom:10px;">Show Year Graphs ▼</button>
+    <div id="year-graphs" style="display:none;"></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Hourly Heatmap & Monthly Trend</h2>
+  <div class="trend-grid">
+    <div id="hourly-heatmap"></div>
+    <div id="monthly-trend"></div>
+  </div>
+</div>
 <div class="card"><h2>Streaks</h2><div id="streak-stats"></div></div>
 <div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
@@ -736,6 +751,17 @@ async function loadStats() {
     '</div>' +
     '</div>';
 }
+function toggleYearGraphs() {
+  const el = document.getElementById('year-graphs');
+  const btn = document.getElementById('year-toggle-btn');
+  if(el.style.display === 'none') {
+    el.style.display = '';
+    btn.textContent = 'Hide Year Graphs ▲';
+  } else {
+    el.style.display = 'none';
+    btn.textContent = 'Show Year Graphs ▼';
+  }
+}
 async function loadSvg() {
   const r = await fetch('/api/svg?' + buildParams({}).toString());
   if(!r.ok) return;
@@ -881,23 +907,23 @@ async function loadHourlyHeatmap() {
   const r = await fetch('/api/stats/hourly-heatmap?' + buildParams({}).toString());
   if(!r.ok) return;
   const data = await r.json();
-  const cell = 12, gap = 1, labelW = 30;
-  const w = labelW + 24 * (cell + gap) + 10;
-  const h = 20 + 7 * (cell + gap) + 10;
+  const cell = 24, gap = 2, labelW = 60;
+  const w = labelW + 24 * (cell + gap) + 20;
+  const h = 40 + 7 * (cell + gap) + 20;
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   let svg = '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">';
   days.forEach((d, i) => {
-    svg += '<text x="5" y="' + (20 + i * (cell + gap) + cell / 2 + 4) + '" font-size="9" fill="#666">' + d + '</text>';
+    svg += '<text x="8" y="' + (40 + i * (cell + gap) + cell / 2 + 5) + '" font-size="14" fill="#666">' + d + '</text>';
   });
   for(let hour = 0; hour < 24; hour++) {
     if(hour % 4 === 0) {
-      svg += '<text x="' + (labelW + hour * (cell + gap) + cell / 2) + '" y="15" font-size="9" fill="#666" text-anchor="middle">' + hour + '</text>';
+      svg += '<text x="' + (labelW + hour * (cell + gap) + cell / 2) + '" y="28" font-size="14" fill="#666" text-anchor="middle">' + hour + '</text>';
     }
   }
   data.grid.forEach((row, dow) => {
     row.forEach((seconds, hour) => {
       const x = labelW + hour * (cell + gap);
-      const y = 20 + dow * (cell + gap);
+      const y = 40 + dow * (cell + gap);
       let color = '#ebedf0';
       if(seconds > 0 && data.max_seconds > 0) {
         const ratio = seconds / data.max_seconds;
@@ -906,7 +932,7 @@ async function loadHourlyHeatmap() {
         else color = '#e5534b';
       }
       const tooltip = days[dow] + ' ' + hour + ':00: ' + fmtDur(seconds);
-      svg += '<rect x="' + x + '" y="' + y + '" width="' + cell + '" height="' + cell + '" fill="' + color + '" rx="2"><title>' + tooltip + '</title></rect>';
+      svg += '<rect x="' + x + '" y="' + y + '" width="' + cell + '" height="' + cell + '" fill="' + color + '" rx="4"><title>' + tooltip + '</title></rect>';
     });
   });
   svg += '</svg>';
