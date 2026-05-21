@@ -797,15 +797,14 @@ async function loadStats() {
     const trackPct = baseVal / maxVal * 100;
     const barPct = val / maxVal * 100;
     if (isAllTime) {
-      return '<div style="display:flex;align-items:center;">' +
-             '<div style="width:' + trackPct.toFixed(1) + '%;height:14px;background:#d4a017;border-radius:4px;"></div></div>';
+      return '<div style="width:' + trackPct.toFixed(1) + '%;height:14px;background:#d4a017;border-radius:4px;"></div>';
     } else if (val <= baseVal) {
       return '<div style="width:' + trackPct.toFixed(1) + '%;height:14px;background:#ebedf0;border-radius:4px;">' +
              '<div style="width:' + (val / baseVal * 100).toFixed(1) + '%;height:100%;background:#0969da;border-radius:4px;"></div></div>';
     } else {
-      return '<div style="display:flex;align-items:center;">' +
-             '<div style="width:' + trackPct.toFixed(1) + '%;height:14px;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
-             '<div style="width:' + (barPct - trackPct).toFixed(1) + '%;height:14px;background:#2da44e;border-radius:0 4px 4px 0;"></div>' +
+      return '<div style="display:flex;align-items:center;width:' + barPct.toFixed(1) + '%;">' +
+             '<div style="width:' + (trackPct / barPct * 100).toFixed(1) + '%;height:14px;background:#0969da;border-radius:4px 0 0 4px;"></div>' +
+             '<div style="width:' + ((barPct - trackPct) / barPct * 100).toFixed(1) + '%;height:14px;background:#2da44e;border-radius:0 4px 4px 0;"></div>' +
              '</div>';
     }
   }
