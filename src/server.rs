@@ -123,6 +123,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats/weekday-weekend", get(api_get_weekday_weekend_stats))
         .route("/stats/streaks", get(api_get_streaks))
         .route("/stats/monthly-trend", get(api_get_monthly_trend))
+        .route("/stats/hourly-heatmap", get(api_get_hourly_heatmap))
         .route("/stats/summary.md", get(api_get_summary_md))
         .route("/daily-data", get(api_get_daily_data))
         .route("/svg", get(api_get_svg))
@@ -409,6 +410,25 @@ async fn api_get_monthly_trend(
     Ok(Json(data))
 }
 
+async fn api_get_hourly_heatmap(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<stats::HourlyHeatmap>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_hourly_heatmap(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Hourly heatmap error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
 async fn api_get_summary_md(
     Query(q): Query<FilterQuery>,
     headers: HeaderMap,
@@ -558,6 +578,7 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
+<div class="card"><h2>Hourly Heatmap</h2><div id="hourly-heatmap"></div></div>
 <div class="card"><h2>Monthly Trend</h2><div id="monthly-trend"></div></div>
 <div class="card"><h2>Streaks</h2><div id="streak-stats"></div></div>
 <div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
@@ -635,6 +656,7 @@ async function loadAll() {
     loadWeekdayWeekendStats(),
     loadStreaks(),
     loadMonthlyTrend(),
+    loadHourlyHeatmap(),
     loadRecords()
   ]);
 }
@@ -854,6 +876,41 @@ async function loadMonthlyTrend() {
   svg += '<text x="' + pad + '" y="18" font-size="10" fill="#666" text-anchor="middle">' + fmtDur(maxSec) + '</text>';
   svg += '</svg>';
   document.getElementById('monthly-trend').innerHTML = svg;
+}
+async function loadHourlyHeatmap() {
+  const r = await fetch('/api/stats/hourly-heatmap?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  const cell = 12, gap = 1, labelW = 30;
+  const w = labelW + 24 * (cell + gap) + 10;
+  const h = 20 + 7 * (cell + gap) + 10;
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  let svg = '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">';
+  days.forEach((d, i) => {
+    svg += '<text x="5" y="' + (20 + i * (cell + gap) + cell / 2 + 4) + '" font-size="9" fill="#666">' + d + '</text>';
+  });
+  for(let hour = 0; hour < 24; hour++) {
+    if(hour % 4 === 0) {
+      svg += '<text x="' + (labelW + hour * (cell + gap) + cell / 2) + '" y="15" font-size="9" fill="#666" text-anchor="middle">' + hour + '</text>';
+    }
+  }
+  data.grid.forEach((row, dow) => {
+    row.forEach((seconds, hour) => {
+      const x = labelW + hour * (cell + gap);
+      const y = 20 + dow * (cell + gap);
+      let color = '#ebedf0';
+      if(seconds > 0 && data.max_seconds > 0) {
+        const ratio = seconds / data.max_seconds;
+        if(ratio < 0.33) color = '#9be9a8';
+        else if(ratio < 0.66) color = '#f9d71c';
+        else color = '#e5534b';
+      }
+      const tooltip = days[dow] + ' ' + hour + ':00: ' + fmtDur(seconds);
+      svg += '<rect x="' + x + '" y="' + y + '" width="' + cell + '" height="' + cell + '" fill="' + color + '" rx="2"><title>' + tooltip + '</title></rect>';
+    });
+  });
+  svg += '</svg>';
+  document.getElementById('hourly-heatmap').innerHTML = svg;
 }
 async function loadRecords() {
   recState.perPage = parseInt(document.getElementById('filter-perpage').value);

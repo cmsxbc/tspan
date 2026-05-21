@@ -713,3 +713,65 @@ pub fn compute_monthly_trend(
     )?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
+
+#[derive(Debug, Serialize)]
+pub struct HourlyHeatmap {
+    pub grid: Vec<Vec<i64>>,
+    pub max_seconds: i64,
+}
+
+pub fn compute_hourly_heatmap(
+    conn: &mut Connection,
+    client_id: &str,
+    alias: &str,
+    command: &str,
+) -> anyhow::Result<HourlyHeatmap> {
+    let mut conditions = vec!["status = 'completed'".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT CAST(strftime('%w', start_time, 'unixepoch', 'localtime') AS INTEGER) as dow,
+                CAST(strftime('%H', start_time, 'unixepoch', 'localtime') AS INTEGER) as hour,
+                COALESCE(SUM(duration_seconds), 0)
+         FROM records WHERE {}
+         GROUP BY dow, hour",
+        wc
+    ))?;
+
+    let mut grid = vec![vec![0i64; 24]; 7];
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| {
+            let sqlite_dow: i32 = row.get(0)?;
+            let hour: i32 = row.get(1)?;
+            let seconds: i64 = row.get(2)?;
+            let mapped_dow = if sqlite_dow == 0 { 6 } else { sqlite_dow - 1 };
+            Ok((mapped_dow, hour, seconds))
+        },
+    )?.collect::<Result<Vec<_>, _>>()?;
+
+    let mut max_seconds = 0i64;
+    for (dow, hour, seconds) in rows {
+        grid[dow as usize][hour as usize] = seconds;
+        if seconds > max_seconds {
+            max_seconds = seconds;
+        }
+    }
+
+    Ok(HourlyHeatmap { grid, max_seconds })
+}
