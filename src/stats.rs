@@ -658,3 +658,58 @@ pub fn compute_streaks(
         last_active_date: days.last().unwrap().clone(),
     })
 }
+
+#[derive(Debug, Serialize)]
+pub struct MonthlyPoint {
+    pub year_month: String,
+    pub total_seconds: i64,
+    pub total_times: i64,
+    pub total_seconds_hr: String,
+}
+
+pub fn compute_monthly_trend(
+    conn: &mut Connection,
+    client_id: &str,
+    alias: &str,
+    command: &str,
+) -> anyhow::Result<Vec<MonthlyPoint>> {
+    let mut conditions = vec!["status = 'completed'".to_string()];
+    let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if client_id != "__global__" && !client_id.is_empty() {
+        conditions.push("client_id = ?".to_string());
+        param_refs.push(&client_id);
+    }
+    if !alias.is_empty() {
+        conditions.push("alias = ?".to_string());
+        param_refs.push(&alias);
+    }
+    let cmd_like;
+    if !command.is_empty() {
+        conditions.push("command LIKE ?".to_string());
+        cmd_like = format!("%{}%", command);
+        param_refs.push(&cmd_like);
+    }
+    let wc = conditions.join(" AND ");
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT strftime('%Y-%m', start_time, 'unixepoch', 'localtime') as ym,
+                COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records WHERE {}
+         GROUP BY ym
+         ORDER BY ym ASC",
+        wc
+    ))?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(&param_refs),
+        |row| {
+            let total_seconds: i64 = row.get(1)?;
+            Ok(MonthlyPoint {
+                year_month: row.get(0)?,
+                total_seconds,
+                total_times: row.get(2)?,
+                total_seconds_hr: human_readable_time(total_seconds),
+            })
+        },
+    )?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}

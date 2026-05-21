@@ -122,6 +122,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats/session-distribution", get(api_get_session_distribution))
         .route("/stats/weekday-weekend", get(api_get_weekday_weekend_stats))
         .route("/stats/streaks", get(api_get_streaks))
+        .route("/stats/monthly-trend", get(api_get_monthly_trend))
         .route("/stats/summary.md", get(api_get_summary_md))
         .route("/daily-data", get(api_get_daily_data))
         .route("/svg", get(api_get_svg))
@@ -389,6 +390,25 @@ async fn api_get_streaks(
     Ok(Json(data))
 }
 
+async fn api_get_monthly_trend(
+    Query(q): Query<FilterQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<stats::MonthlyPoint>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let alias = q.alias.unwrap_or_default();
+    let command = q.command.unwrap_or_default();
+    let mut conn = state.pool.lock().unwrap();
+    let data = stats::compute_monthly_trend(&mut conn, &client_id, &alias, &command).map_err(|e| {
+        tracing::error!("Monthly trend error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(data))
+}
+
 async fn api_get_summary_md(
     Query(q): Query<FilterQuery>,
     headers: HeaderMap,
@@ -483,7 +503,7 @@ async fn api_backup(
     ).into_response())
 }
 
-const INDEX_HTML: &str = r#"<!DOCTYPE html>
+const INDEX_HTML: &str = r##"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>WYD Stats</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;padding:20px 40px;color:#333;background:#f6f8fa}
@@ -538,6 +558,7 @@ th{font-size:12px;color:#666;font-weight:600}
 <div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
 <div class="card"><h2>Activity Graph (All Time)</h2><div id="svg-all-time"></div></div>
 <div id="year-graphs"></div>
+<div class="card"><h2>Monthly Trend</h2><div id="monthly-trend"></div></div>
 <div class="card"><h2>Streaks</h2><div id="streak-stats"></div></div>
 <div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
@@ -613,6 +634,7 @@ async function loadAll() {
     loadSessionDistribution(),
     loadWeekdayWeekendStats(),
     loadStreaks(),
+    loadMonthlyTrend(),
     loadRecords()
   ]);
 }
@@ -800,6 +822,39 @@ async function loadStreaks() {
   html += '</div>';
   document.getElementById('streak-stats').innerHTML = html;
 }
+async function loadMonthlyTrend() {
+  const r = await fetch('/api/stats/monthly-trend?' + buildParams({}).toString());
+  if(!r.ok) return;
+  const data = await r.json();
+  if(data.length === 0) {
+    document.getElementById('monthly-trend').innerHTML = '<p style="color:#666;">No data</p>';
+    return;
+  }
+  const w = 800, h = 160, pad = 30;
+  const maxSec = Math.max(...data.map(d => d.total_seconds), 1);
+  const stepX = data.length > 1 ? (w - pad * 2) / (data.length - 1) : 0;
+  let points = '';
+  data.forEach((d, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (d.total_seconds / maxSec) * (h - pad * 2);
+    points += x + ',' + y + ' ';
+  });
+  let svg = '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">';
+  svg += '<polyline points="' + points.trim() + '" fill="none" stroke="#0969da" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+  const labelStep = Math.max(1, Math.floor(data.length / 10));
+  data.forEach((d, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (d.total_seconds / maxSec) * (h - pad * 2);
+    svg += '<circle cx="' + x + '" cy="' + y + '" r="3" fill="#0969da"/>';
+    svg += '<title>' + d.year_month + ': ' + d.total_seconds_hr + ' (' + d.total_times + ' times)</title>';
+    if(i % labelStep === 0) {
+      svg += '<text x="' + x + '" y="' + (h - 5) + '" font-size="10" fill="#666" text-anchor="middle">' + d.year_month + '</text>';
+    }
+  });
+  svg += '<text x="' + pad + '" y="18" font-size="10" fill="#666" text-anchor="middle">' + fmtDur(maxSec) + '</text>';
+  svg += '</svg>';
+  document.getElementById('monthly-trend').innerHTML = svg;
+}
 async function loadRecords() {
   recState.perPage = parseInt(document.getElementById('filter-perpage').value);
   const params = buildParams({page: recState.page, per_page: recState.perPage});
@@ -839,7 +894,7 @@ loadClients().then(() => loadAliases().then(() => {
   loadAll();
 }));
 </script>
-</body></html>"#;
+</body></html>"##;
 
 async fn web_index(
     headers: HeaderMap,
