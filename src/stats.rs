@@ -29,7 +29,9 @@ pub struct PastNStat {
 #[derive(Debug, Serialize)]
 pub struct IntervalStats {
     pub current_interval: i64,
+    pub current_interval_hr: String,
     pub max_interval: i64,
+    pub max_interval_hr: String,
     pub mean_interval: i64,
     pub mean_interval_hr: String,
 }
@@ -170,14 +172,14 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     )?.collect::<Result<Vec<_>, _>>()?;
 
     let current_interval = if let Some(last) = starts.last() {
-        (today - last) / 86400
+        today - last
     } else {
         0
     };
 
     let mut max_interval = 0i64;
     for i in 0..starts.len().saturating_sub(1) {
-        let interval = (starts[i + 1] - starts[i]) / 86400;
+        let interval = starts[i + 1] - starts[i];
         if interval > max_interval {
             max_interval = interval;
         }
@@ -186,7 +188,9 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
 
     let interval = IntervalStats {
         current_interval,
+        current_interval_hr: human_readable_time(current_interval),
         max_interval,
+        max_interval_hr: human_readable_time(max_interval),
         mean_interval,
         mean_interval_hr: human_readable_time(mean_interval),
     };

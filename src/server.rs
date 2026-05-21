@@ -727,19 +727,18 @@ async function loadStats() {
   document.querySelector('#past-n-table tbody').innerHTML = html;
   const maxInt = s.interval.max_interval || 1;
   const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
-  const meanDays = Math.round(s.interval.mean_interval / 86400);
-  const meanPct = Math.min(100, Math.round((meanDays / maxInt) * 100));
+  const meanPct = Math.min(100, Math.round((s.interval.mean_interval / maxInt) * 100));
   document.getElementById('interval-stats').innerHTML =
     '<div class="interval-grid">' +
     '<div class="interval-card">' +
     '<div class="interval-icon">🔥</div>' +
-    '<div class="interval-value">' + s.interval.current_interval + '<span class="interval-unit"> days</span></div>' +
+    '<div class="interval-value">' + s.interval.current_interval_hr + '</div>' +
     '<div class="stat-label">Current Interval</div>' +
     '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
     '</div>' +
     '<div class="interval-card max">' +
     '<div class="interval-icon">📊</div>' +
-    '<div class="interval-value">' + s.interval.max_interval + '<span class="interval-unit"> days</span></div>' +
+    '<div class="interval-value">' + s.interval.max_interval_hr + '</div>' +
     '<div class="stat-label">Max Interval</div>' +
     '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:100%"></div></div>' +
     '</div>' +
