@@ -225,7 +225,7 @@ pub fn generate_svg_calendar(
         }
     }
 
-    let base_color = scheme.base;
+    let base_color = "#1f2328";
     let mut prev_month = 0u32;
 
     // Phase 1: inner cell + inner borders + corners
@@ -345,7 +345,7 @@ pub fn generate_svg_calendar(
     if year.is_some() {
         let pixel = 3;
         let dig_gap = 2;
-        let seg_color = scheme.base;
+        let seg_color = "#1f2328";
         let dig_w = 5 * pixel;
         let dig_h = 5 * pixel;
         for row in 0..rows {

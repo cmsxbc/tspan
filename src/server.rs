@@ -566,7 +566,14 @@ th{font-size:12px;color:#666;font-weight:600}
 #year-graphs .card{margin-bottom:15px}
 </style></head><body>
 <div class="nav"><a href="/">Home</a><a href="/admin">Admin</a></div>
-<h1>Activity Stats</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+  <h1 style="margin:0;">Activity Stats</h1>
+  <select id="filter-scheme" onchange="changeColorScheme(this.value)" style="padding:6px 10px;border-radius:4px;border:1px solid #d0d7de;">
+    <option value="heatmap">热力图</option>
+    <option value="traffic">交通灯</option>
+    <option value="ocean">海洋</option>
+  </select>
+</div>
 <div class="card">
   <div class="filters">
     <select id="filter-client"><option value="">All Clients</option></select>
@@ -577,11 +584,6 @@ th{font-size:12px;color:#666;font-weight:600}
       <option value="50" selected>50 / page</option>
       <option value="100">100 / page</option>
       <option value="200">200 / page</option>
-    </select>
-    <select id="filter-scheme" onchange="changeColorScheme(this.value)" style="padding:6px 10px;border-radius:4px;border:1px solid #d0d7de;">
-      <option value="heatmap">热力图</option>
-      <option value="traffic">交通灯</option>
-      <option value="ocean">海洋</option>
     </select>
     <button class="btn btn-gen" onclick="applyFilters()">Search</button>
   </div>
