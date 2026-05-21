@@ -600,8 +600,9 @@ th{font-size:12px;color:#666;font-weight:600}
 </div>
 <div class="card">
   <div class="year-graphs-wrap">
-    <button class="btn btn-gen" onclick="toggleYearGraphs()" id="year-toggle-btn" style="margin-bottom:10px;">Hide Year Graphs ▲</button>
-    <div id="year-graphs"></div>
+    <div id="year-graph-current"></div>
+    <button class="btn btn-gen" onclick="toggleYearGraphs()" id="year-toggle-btn" style="margin-bottom:10px;margin-top:10px;">Show Past Years ▼</button>
+    <div id="year-graphs" style="display:none;"></div>
   </div>
 </div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th style="min-width:130px;">Ratio</th><th>Sessions</th><th>Days</th><th style="min-width:130px;">Day Ratio</th><th style="min-width:130px;">Mean</th></tr></thead><tbody></tbody></table></div>
@@ -878,10 +879,10 @@ function toggleYearGraphs() {
   const btn = document.getElementById('year-toggle-btn');
   if(el.style.display === 'none') {
     el.style.display = '';
-    btn.textContent = 'Hide Year Graphs ▲';
+    btn.textContent = 'Hide Past Years ▲';
   } else {
     el.style.display = 'none';
-    btn.textContent = 'Show Year Graphs ▼';
+    btn.textContent = 'Show Past Years ▼';
   }
 }
 async function loadSvg() {
@@ -889,11 +890,20 @@ async function loadSvg() {
   if(!r.ok) return;
   const data = await r.json();
   document.getElementById('svg-all-time').innerHTML = data.all_time;
-  let yhtml = '';
-  data.years.forEach(y => {
-    yhtml += '<div class="card"><h2>' + y[0] + '</h2><div class="year-svg">' + y[1] + '</div></div>';
-  });
-  document.getElementById('year-graphs').innerHTML = yhtml;
+  if(data.years.length > 0) {
+    const current = data.years[0];
+    document.getElementById('year-graph-current').innerHTML =
+      '<div class="card"><h2>' + current[0] + '</h2><div class="year-svg">' + current[1] + '</div></div>';
+    let yhtml = '';
+    for(let i = 1; i < data.years.length; i++) {
+      const y = data.years[i];
+      yhtml += '<div class="card"><h2>' + y[0] + '</h2><div class="year-svg">' + y[1] + '</div></div>';
+    }
+    document.getElementById('year-graphs').innerHTML = yhtml;
+  } else {
+    document.getElementById('year-graph-current').innerHTML = '';
+    document.getElementById('year-graphs').innerHTML = '';
+  }
 }
 async function loadClientStats() {
   const r = await fetch('/api/stats/by-client?' + buildParams({}).toString());
