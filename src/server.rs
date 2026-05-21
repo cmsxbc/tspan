@@ -557,8 +557,10 @@ th{font-size:12px;color:#666;font-weight:600}
 .code{font-family:monospace;background:#f6f8fa;padding:2px 6px;border-radius:3px;font-size:12px}
 #svg-all-time{margin-top:10px}
 .year-svg{margin-top:10px}
-.trend-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-@media(max-width:900px){.trend-grid{grid-template-columns:1fr}}
+.overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.overview-grid .stat-card{box-shadow:none;border:1px solid #eee;padding:12px}
+.pattern-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:start}
+@media(max-width:900px){.pattern-grid{grid-template-columns:1fr}}
 .year-graphs-wrap{margin-top:15px}
 #year-graphs .card{margin-bottom:15px}
 </style></head><body>
@@ -578,8 +580,10 @@ th{font-size:12px;color:#666;font-weight:600}
     <button class="btn btn-gen" onclick="applyFilters()">Search</button>
   </div>
 </div>
-<div id="stats-cards" class="stats-grid"></div>
-<div class="card"><h2>Interval</h2><div id="interval-stats"></div></div>
+<div class="card">
+  <h2>Overview</h2>
+  <div id="overview-stats" class="overview-grid"></div>
+</div>
 <div class="card">
   <h2>Activity Graph (All Time)</h2>
   <div id="svg-all-time"></div>
@@ -588,15 +592,14 @@ th{font-size:12px;color:#666;font-weight:600}
     <div id="year-graphs" style="display:none;"></div>
   </div>
 </div>
+<div class="card"><h2>Monthly Trend</h2><div id="monthly-trend"></div></div>
 <div class="card">
-  <h2>Hourly Heatmap & Monthly Trend</h2>
-  <div class="trend-grid">
+  <h2>Activity Patterns</h2>
+  <div class="pattern-grid">
     <div id="hourly-heatmap"></div>
-    <div id="monthly-trend"></div>
+    <div id="wd-we-stats"></div>
   </div>
 </div>
-<div class="card"><h2>Streaks</h2><div id="streak-stats"></div></div>
-<div class="card"><h2>Weekday vs Weekend</h2><div id="wd-we-stats"></div></div>
 <div class="card"><h2>Session Distribution</h2><div id="session-dist"></div></div>
 <div class="card"><h2>Past N Stats</h2><table id="past-n-table"><thead><tr><th>Period</th><th class="col-dur">Duration</th><th>Ratio</th><th>Times</th><th>Day Ratio</th><th class="col-dur">Mean</th></tr></thead><tbody></tbody></table></div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
@@ -661,15 +664,16 @@ function updateGroupStatsVisibility() {
 }
 async function loadAll() {
   updateGroupStatsVisibility();
+  document.getElementById('overview-stats').innerHTML = '';
+  await loadStats();
+  await loadStreaks();
   await Promise.all([
-    loadStats(),
     loadSvg(),
     loadClientStats(),
     loadAliasStats(),
     loadCommandStats(),
     loadSessionDistribution(),
     loadWeekdayWeekendStats(),
-    loadStreaks(),
     loadMonthlyTrend(),
     loadHourlyHeatmap(),
     loadRecords()
@@ -715,40 +719,37 @@ async function loadStats() {
   const r = await fetch('/api/stats?' + buildParams({}).toString());
   if(!r.ok) return;
   const s = await r.json();
-  document.getElementById('stats-cards').innerHTML =
+  const maxInt = s.interval.max_interval || 1;
+  const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
+  const meanPct = Math.min(100, Math.round((s.interval.mean_interval / maxInt) * 100));
+  document.getElementById('overview-stats').innerHTML =
     '<div class="stat-card"><div class="stat-value">' + s.total.total_days + '</div><div class="stat-label">Total Days</div></div>' +
     '<div class="stat-card"><div class="stat-value">' + s.total.total_times + '</div><div class="stat-label">Total Times</div></div>' +
     '<div class="stat-card"><div class="stat-value">' + s.total.total_seconds_hr + '</div><div class="stat-label">Total Duration</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + s.total.mean_usage_hr + '</div><div class="stat-label">Mean / Session</div></div>';
+    '<div class="stat-card"><div class="stat-value">' + s.total.mean_usage_hr + '</div><div class="stat-label">Mean / Session</div></div>' +
+    '<div class="stat-card" style="border-top:3px solid #0969da;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">🔥</div>' +
+    '<div class="stat-value" style="font-size:20px;">' + s.interval.current_interval_hr + '</div>' +
+    '<div class="stat-label">Current Interval</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #cf222e;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">📊</div>' +
+    '<div class="stat-value" style="font-size:20px;">' + s.interval.max_interval_hr + '</div>' +
+    '<div class="stat-label">Max Interval</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:100%;background:#cf222e;"></div></div>' +
+    '</div>' +
+    '<div class="stat-card" style="border-top:3px solid #2da44e;">' +
+    '<div style="font-size:18px;margin-bottom:2px;">⏱</div>' +
+    '<div class="stat-value" style="font-size:20px;">' + s.interval.mean_interval_hr + '</div>' +
+    '<div class="stat-label">Mean Interval</div>' +
+    '<div class="interval-bar-bg" style="margin-top:6px;"><div class="interval-bar-fill" style="width:' + meanPct + '%;background:#2da44e;"></div></div>' +
+    '</div>';
   let html = '';
   s.past_n.forEach(p => {
     html += '<tr><td>' + p.name + '</td><td class="col-dur">' + fmtDur(p.seconds) + '</td><td>' + p.ratio.toFixed(2) + '%</td><td>' + p.times + '</td><td>' + p.day_ratio.toFixed(2) + '%</td><td class="col-dur">' + fmtDur(p.mean_usage) + '</td></tr>';
   });
   document.querySelector('#past-n-table tbody').innerHTML = html;
-  const maxInt = s.interval.max_interval || 1;
-  const curPct = Math.min(100, Math.round((s.interval.current_interval / maxInt) * 100));
-  const meanPct = Math.min(100, Math.round((s.interval.mean_interval / maxInt) * 100));
-  document.getElementById('interval-stats').innerHTML =
-    '<div class="interval-grid">' +
-    '<div class="interval-card">' +
-    '<div class="interval-icon">🔥</div>' +
-    '<div class="interval-value">' + s.interval.current_interval_hr + '</div>' +
-    '<div class="stat-label">Current Interval</div>' +
-    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:' + curPct + '%"></div></div>' +
-    '</div>' +
-    '<div class="interval-card max">' +
-    '<div class="interval-icon">📊</div>' +
-    '<div class="interval-value">' + s.interval.max_interval_hr + '</div>' +
-    '<div class="stat-label">Max Interval</div>' +
-    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:100%"></div></div>' +
-    '</div>' +
-    '<div class="interval-card mean">' +
-    '<div class="interval-icon">⏱</div>' +
-    '<div class="interval-value">' + s.interval.mean_interval_hr + '</div>' +
-    '<div class="stat-label">Mean Interval</div>' +
-    '<div class="interval-bar-bg"><div class="interval-bar-fill" style="width:' + meanPct + '%"></div></div>' +
-    '</div>' +
-    '</div>';
 }
 function toggleYearGraphs() {
   const el = document.getElementById('year-graphs');
@@ -862,12 +863,11 @@ async function loadStreaks() {
   const r = await fetch('/api/stats/streaks?' + buildParams({}).toString());
   if(!r.ok) return;
   const data = await r.json();
-  let html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">';
-  html += '<div class="stat-card"><div class="stat-value">' + data.current_streak + '</div><div class="stat-label">Current Streak (days)</div></div>';
-  html += '<div class="stat-card"><div class="stat-value">' + data.max_streak + '</div><div class="stat-label">Max Streak (days)</div></div>';
-  html += '<div class="stat-card"><div class="stat-value">' + data.last_active_date + '</div><div class="stat-label">Last Active</div></div>';
-  html += '</div>';
-  document.getElementById('streak-stats').innerHTML = html;
+  const html =
+    '<div class="stat-card"><div class="stat-value">' + data.current_streak + '</div><div class="stat-label">Current Streak</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + data.max_streak + '</div><div class="stat-label">Max Streak</div></div>' +
+    '<div class="stat-card"><div class="stat-value" style="font-size:16px;">' + data.last_active_date + '</div><div class="stat-label">Last Active</div></div>';
+  document.getElementById('overview-stats').insertAdjacentHTML('beforeend', html);
 }
 async function loadMonthlyTrend() {
   const r = await fetch('/api/stats/monthly-trend?' + buildParams({}).toString());
