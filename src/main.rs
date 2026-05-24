@@ -19,7 +19,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    #[arg(short, long, default_value = "data.db")]
+    #[arg(short, long, default_value = "data.db", env = "DATABASE_URL")]
     database: String,
 
     #[arg(short, long, default_value = "0.0.0.0:8080")]
