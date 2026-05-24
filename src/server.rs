@@ -1266,7 +1266,7 @@ th{font-size:12px;color:#666;font-weight:600}
     if tokens.is_empty() {
         html.push_str("<p>No tokens.</p>");
     } else {
-        html.push_str(r#"<table><tr><th>Token</th><th>Description</th><th>Created</th><th>Action</th></tr>"#);
+        html.push_str(r#"<table><tr><th>Token</th><th>Client</th><th>Description</th><th>Created</th><th>Action</th></tr>"#);
         for t in &tokens {
             let created = chrono::DateTime::from_timestamp(t.created_at, 0)
                 .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -1277,9 +1277,10 @@ th{font-size:12px;color:#666;font-weight:600}
                 "****".to_string()
             };
             html.push_str(&format!(
-                r#"<tr><td class="token-preview">{}</td><td>{}</td><td>{}</td>
+                r#"<tr><td class="token-preview">{}</td><td class="code">{}</td><td>{}</td><td>{}</td>
                 <td><button class="btn btn-discard" onclick="revokeToken('{}')">Revoke</button></td></tr>"#,
                 preview,
+                html_escape(&t.client_id),
                 t.description.as_deref().unwrap_or("-"),
                 created,
                 html_escape(&t.token)
