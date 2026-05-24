@@ -1489,6 +1489,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
+ "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",

@@ -1,8 +1,11 @@
 use chrono::Utc;
 use rusqlite::{Connection, Result as SqlResult, params};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 pub type DbPool = Arc<Mutex<Connection>>;
+
+const MAX_COMMAND_LENGTH: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -36,6 +39,7 @@ pub struct ApiToken {
 
 pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    conn.execute_batch("PRAGMA busy_timeout=5000;")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS clients (
             id          TEXT PRIMARY KEY,
@@ -83,6 +87,35 @@ pub fn create_pool(db_path: &str) -> SqlResult<DbPool> {
     Ok(Arc::new(Mutex::new(conn)))
 }
 
+pub fn check_integrity(conn: &mut Connection) -> SqlResult<String> {
+    conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))
+}
+
+pub fn check_integrity_quick(conn: &mut Connection) -> SqlResult<String> {
+    conn.query_row("PRAGMA quick_check", [], |row| row.get(0))
+}
+
+pub fn run_wal_checkpoint(conn: &mut Connection) -> SqlResult<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    Ok(())
+}
+
+fn in_transaction<T, F>(conn: &mut Connection, f: F) -> SqlResult<T>
+where F: FnOnce(&mut Connection) -> SqlResult<T>
+{
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match f(conn) {
+        Ok(val) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(val)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
 pub fn ensure_client(conn: &mut Connection, client_id: &str) -> SqlResult<()> {
     let now = Utc::now().timestamp();
     conn.execute(
@@ -107,36 +140,47 @@ pub fn start_session(
     alias: Option<&str>,
     process_id: Option<i64>,
 ) -> SqlResult<i64> {
-    ensure_client(conn, client_id)?;
-    let now = Utc::now().timestamp();
-    let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
-    conn.execute(
-        "INSERT INTO records (client_id, start_time, command, command_tokens, alias, process_id, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?2)",
-        params![client_id, now, command, tokens_json.as_deref(), alias, process_id],
-    )?;
-    Ok(conn.last_insert_rowid())
+    if let Some(cmd) = command {
+        if cmd.len() > MAX_COMMAND_LENGTH {
+            return Err(rusqlite::Error::InvalidParameterName(
+                format!("command too long ({} > {})", cmd.len(), MAX_COMMAND_LENGTH)
+            ));
+        }
+    }
+    in_transaction(conn, |conn| {
+        ensure_client(conn, client_id)?;
+        let now = Utc::now().timestamp();
+        let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
+        conn.execute(
+            "INSERT INTO records (client_id, start_time, command, command_tokens, alias, process_id, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?2)",
+            params![client_id, now, command, tokens_json.as_deref(), alias, process_id],
+        )?;
+        Ok(conn.last_insert_rowid())
+    })
 }
 
 pub fn end_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlResult<Option<i64>> {
-    let now = Utc::now().timestamp();
-    let updated = conn.execute(
-        "UPDATE records
-         SET end_time = ?1,
-             duration_seconds = ?1 - start_time,
-             status = 'completed'
-         WHERE id = ?2 AND status = 'active' AND client_id = ?3",
-        params![now, id, client_id],
-    )?;
-    if updated == 0 {
-        return Ok(None);
-    }
-    let duration: i64 = conn.query_row(
-        "SELECT duration_seconds FROM records WHERE id = ?1",
-        params![id],
-        |row| row.get(0),
-    )?;
-    Ok(Some(duration))
+    in_transaction(conn, |conn| {
+        let now = Utc::now().timestamp();
+        let updated = conn.execute(
+            "UPDATE records
+             SET end_time = ?1,
+                 duration_seconds = ?1 - start_time,
+                 status = 'completed'
+             WHERE id = ?2 AND status = 'active' AND client_id = ?3",
+            params![now, id, client_id],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        let duration: i64 = conn.query_row(
+            "SELECT duration_seconds FROM records WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(Some(duration))
+    })
 }
 
 pub fn discard_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlResult<bool> {
@@ -148,20 +192,22 @@ pub fn discard_session(conn: &mut Connection, id: i64, client_id: &str) -> SqlRe
 }
 
 pub fn end_session_admin(conn: &mut Connection, id: i64) -> SqlResult<Option<i64>> {
-    let now = Utc::now().timestamp();
-    let updated = conn.execute(
-        "UPDATE records SET end_time = ?1, duration_seconds = ?1 - start_time, status = 'completed' WHERE id = ?2 AND status = 'active'",
-        params![now, id],
-    )?;
-    if updated == 0 {
-        return Ok(None);
-    }
-    let duration: i64 = conn.query_row(
-        "SELECT duration_seconds FROM records WHERE id = ?1",
-        params![id],
-        |row| row.get(0),
-    )?;
-    Ok(Some(duration))
+    in_transaction(conn, |conn| {
+        let now = Utc::now().timestamp();
+        let updated = conn.execute(
+            "UPDATE records SET end_time = ?1, duration_seconds = ?1 - start_time, status = 'completed' WHERE id = ?2 AND status = 'active'",
+            params![now, id],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        let duration: i64 = conn.query_row(
+            "SELECT duration_seconds FROM records WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(Some(duration))
+    })
 }
 
 pub fn discard_session_admin(conn: &mut Connection, id: i64) -> SqlResult<bool> {
@@ -387,14 +433,28 @@ pub fn import_record(
     command: Option<&str>,
     alias: Option<&str>,
 ) -> SqlResult<()> {
-    ensure_client(conn, client_id)?;
-    let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
-    conn.execute(
-        "INSERT INTO records (client_id, start_time, end_time, duration_seconds, command, command_tokens, alias, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'completed', ?2)",
-        params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref(), alias],
-    )?;
-    Ok(())
+    if end_time <= start_time {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "end_time must be greater than start_time".into()
+        ));
+    }
+    if let Some(cmd) = command {
+        if cmd.len() > MAX_COMMAND_LENGTH {
+            return Err(rusqlite::Error::InvalidParameterName(
+                format!("command too long ({} > {})", cmd.len(), MAX_COMMAND_LENGTH)
+            ));
+        }
+    }
+    in_transaction(conn, |conn| {
+        ensure_client(conn, client_id)?;
+        let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
+        conn.execute(
+            "INSERT INTO records (client_id, start_time, end_time, duration_seconds, command, command_tokens, alias, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'completed', ?2)",
+            params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref(), alias],
+        )?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -503,5 +563,47 @@ mod tests {
         assert_eq!(cmd, None);
         assert_eq!(tokens, None);
         assert_eq!(alias, None);
+    }
+
+    #[test]
+    fn test_import_record_rejects_invalid_time_range() {
+        let mut conn = setup();
+        let result = import_record(&mut conn, "c1", 100, 50, 10, Some("cmd"), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_import_record_rejects_long_command() {
+        let mut conn = setup();
+        let long_cmd = "x".repeat(MAX_COMMAND_LENGTH + 1);
+        let result = import_record(&mut conn, "c1", 1, 2, 1, Some(&long_cmd), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_start_session_rejects_long_command() {
+        let mut conn = setup();
+        let long_cmd = "x".repeat(MAX_COMMAND_LENGTH + 1);
+        let result = start_session(&mut conn, "c1", Some(&long_cmd), None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_start_session_transaction_rolls_back_on_error() {
+        let mut conn = setup();
+        let long_cmd = "x".repeat(MAX_COMMAND_LENGTH + 1);
+        let _ = start_session(&mut conn, "c1", Some(&long_cmd), None, None);
+        // Transaction should have rolled back — no record inserted
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM records", [], |row| row.get(0)
+        ).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_integrity_check_empty_db() {
+        let mut conn = setup();
+        let result = check_integrity(&mut conn).unwrap();
+        assert_eq!(result, "ok");
     }
 }

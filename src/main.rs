@@ -86,14 +86,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::TokenGenerate { client_id, description }) => {
             let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-            let mut conn = pool.lock().unwrap();
+            let mut conn = pool.lock();
             db::add_api_token(&mut conn, &token, &client_id, description.as_deref())?;
             println!("Generated token: {}", token);
             println!("Client ID: {}", client_id);
             Ok(())
         }
         Some(Commands::TokenList) => {
-            let mut conn = pool.lock().unwrap();
+            let mut conn = pool.lock();
             let tokens = db::list_api_tokens(&mut conn)?;
             for t in tokens {
                 println!("{} - {} - {}", t.token, t.description.unwrap_or_default(), t.created_at);
@@ -101,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Commands::TokenRevoke { token }) => {
-            let mut conn = pool.lock().unwrap();
+            let mut conn = pool.lock();
             if db::delete_api_token(&mut conn, &token)? {
                 println!("Token revoked.");
             } else {
@@ -112,8 +112,16 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // Default: start server
             // Ensure at least one token exists for initial setup
+            let auth = AuthConfig {
+                web_username: cli.web_username.clone(),
+                web_password_hash: cli.web_password.clone(),
+            };
+
+            let state = AppState { pool, auth, command_token_limit: cli.command_token_limit };
+
+            // Ensure at least one token exists for initial setup
             {
-                let mut conn = pool.lock().unwrap();
+                let mut conn = state.pool.lock();
                 let tokens = db::list_api_tokens(&mut conn)?;
                 if tokens.is_empty() {
                     let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
@@ -123,12 +131,34 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let auth = AuthConfig {
-                web_username: cli.web_username.clone(),
-                web_password_hash: cli.web_password.clone(),
-            };
+            // Background maintenance: WAL checkpoint every hour, integrity check every 6 hours
+            let bg_pool = state.pool.clone();
+            tokio::spawn(async move {
+                let mut tick_count = 0u64;
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+                loop {
+                    interval.tick().await;
+                    tick_count += 1;
+                    let mut conn = bg_pool.lock();
+                    if let Err(e) = db::run_wal_checkpoint(&mut conn) {
+                        tracing::warn!("WAL checkpoint failed: {}", e);
+                    }
+                    if tick_count % 6 == 0 {
+                        match db::check_integrity(&mut conn) {
+                            Ok(ref result) if result == "ok" => {
+                                tracing::info!("Database integrity check passed");
+                            }
+                            Ok(result) => {
+                                tracing::error!("Database integrity check FAILED: {}", result);
+                            }
+                            Err(e) => {
+                                tracing::error!("Integrity check error: {}", e);
+                            }
+                        }
+                    }
+                }
+            });
 
-            let state = AppState { pool, auth, command_token_limit: cli.command_token_limit };
             let app = server::create_router(state);
 
             let listener = tokio::net::TcpListener::bind(&cli.bind).await?;

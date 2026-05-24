@@ -182,7 +182,7 @@ async fn api_start_session(
 ) -> Result<Json<StartSessionResp>, StatusCode> {
     let token_client_id = check_api_auth(&state, &headers).await?;
     let client_id = req.client_id.unwrap_or(token_client_id);
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let id = db::start_session(
         &mut conn,
         &client_id,
@@ -207,7 +207,7 @@ async fn api_end_session(
     Path(id): Path<i64>,
 ) -> Result<Json<EndSessionResp>, Response> {
     let (is_admin, client_id) = resolve_auth(&state, &headers).await?;
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let duration = if is_admin {
         db::end_session_admin(&mut conn, id)
     } else {
@@ -231,7 +231,7 @@ async fn api_discard_session(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let ok = db::discard_session_admin(&mut conn, id).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -251,7 +251,7 @@ async fn api_get_orphaned(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let records = db::get_orphaned_sessions_admin(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -282,7 +282,7 @@ async fn api_get_stats(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -299,7 +299,7 @@ async fn api_get_stats_by_client(
         return Err(unauthorized_web_response());
     }
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_stats_by_client(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -316,7 +316,7 @@ async fn api_get_stats_by_alias(
         return Err(unauthorized_web_response());
     }
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_stats_by_alias(&mut conn, &client_id).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -334,7 +334,7 @@ async fn api_get_stats_by_command(
     }
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let depth = q.depth.unwrap_or(0);
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_stats_by_command(&mut conn, &client_id, depth, state.command_token_limit).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -353,7 +353,7 @@ async fn api_get_session_distribution(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_session_distribution(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Session distribution error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -372,7 +372,7 @@ async fn api_get_weekday_weekend_stats(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_weekday_weekend_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Weekday/weekend stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -391,7 +391,7 @@ async fn api_get_streaks(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_streaks(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Streaks error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -410,7 +410,7 @@ async fn api_get_monthly_trend(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_monthly_trend(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Monthly trend error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -429,7 +429,7 @@ async fn api_get_hourly_heatmap(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_hourly_heatmap(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Hourly heatmap error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -448,7 +448,7 @@ async fn api_get_summary_md(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -498,9 +498,26 @@ async fn api_backup(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
+
+    // Quick integrity check before backup
+    {
+        let mut conn = state.pool.lock();
+        match crate::db::check_integrity_quick(&mut *conn) {
+            Ok(ref result) if result == "ok" => {},
+            Ok(result) => {
+                tracing::error!("Pre-backup integrity check failed: {}", result);
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Database integrity check failed, backup aborted").into_response());
+            }
+            Err(e) => {
+                tracing::error!("Pre-backup integrity check error: {}", e);
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Integrity check error, backup aborted").into_response());
+            }
+        }
+    }
+
     let temp_path = format!("/tmp/tspan_backup_{}.db", chrono::Utc::now().timestamp());
     {
-        let conn = state.pool.lock().unwrap();
+        let conn = state.pool.lock();
         let mut dest = rusqlite::Connection::open(&temp_path).map_err(|e| {
             tracing::error!("Backup temp db error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1160,7 +1177,7 @@ async fn web_admin(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let orphaned = match db::get_orphaned_sessions_admin(&mut conn) {
         Ok(r) => r,
         Err(e) => {
@@ -1403,7 +1420,7 @@ async fn api_list_records(
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
 
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let (records, total) = db::list_records_page(&mut conn, &client_filter, &alias, &command, page, per_page)
         .map_err(|e| {
             tracing::error!("DB error: {}", e);
@@ -1437,7 +1454,7 @@ async fn api_list_clients(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let clients = db::distinct_client_ids(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1453,7 +1470,7 @@ async fn api_delete_record(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     match db::delete_record(&mut conn, id) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Ok(StatusCode::NOT_FOUND),
@@ -1471,7 +1488,7 @@ async fn api_admin_clients(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let clients = db::list_clients(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1486,7 +1503,7 @@ async fn api_list_tokens(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let tokens = db::list_api_tokens(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1504,7 +1521,7 @@ async fn api_create_token(
     }
     let client_id = req.client_id.unwrap_or_else(|| "default".to_string());
     let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     db::add_api_token(&mut conn, &token, &client_id, req.description.as_deref()).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1520,7 +1537,7 @@ async fn api_revoke_token(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let ok = db::delete_api_token(&mut conn, &token).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1543,7 +1560,7 @@ async fn api_get_daily_data(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1562,7 +1579,7 @@ async fn api_get_svg(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1580,7 +1597,7 @@ async fn api_get_aliases(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     let data = stats::compute_stats_by_alias(&mut conn, "__global__").map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
