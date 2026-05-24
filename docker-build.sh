@@ -22,6 +22,8 @@ echo "==> Building release binary locally..."
 cargo build --release
 
 echo "==> Building Docker image ${IMAGE_NAME}..."
-docker build -f Dockerfile.local -t "${IMAGE_NAME}" .
+# Use --no-cache to ensure the freshly compiled binary is always copied.
+# Dockerfile.local has no expensive intermediate steps, so the cost is negligible.
+docker build -f Dockerfile.local --no-cache -t "${IMAGE_NAME}" .
 
 echo "==> Done: ${IMAGE_NAME}"

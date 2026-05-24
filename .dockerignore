@@ -1,0 +1,21 @@
+# Rust build artifacts (preserve only the final binary)
+target/debug/
+target/release/build/
+target/release/deps/
+target/release/.fingerprint/
+target/release/.cargo-lock
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Local data
+data.db*
+
+# Misc
+docs/
+scripts/
