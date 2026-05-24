@@ -354,13 +354,14 @@ pub fn import_record(
     end_time: i64,
     duration_seconds: i64,
     command: Option<&str>,
+    alias: Option<&str>,
 ) -> SqlResult<()> {
     ensure_client(conn, client_id)?;
     let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
     conn.execute(
-        "INSERT INTO records (client_id, start_time, end_time, duration_seconds, command, command_tokens, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'completed', ?2)",
-        params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref()],
+        "INSERT INTO records (client_id, start_time, end_time, duration_seconds, command, command_tokens, alias, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'completed', ?2)",
+        params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref(), alias],
     )?;
     Ok(())
 }
@@ -444,30 +445,32 @@ mod tests {
     #[test]
     fn test_import_record_stores_command_and_tokens() {
         let mut conn = setup();
-        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, Some("vim file.txt")).unwrap();
+        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, Some("vim file.txt"), Some("editing")).unwrap();
 
-        let (cmd, tokens): (Option<String>, Option<String>) = conn.query_row(
-            "SELECT command, command_tokens FROM records WHERE client_id = ?1",
+        let (cmd, tokens, alias): (Option<String>, Option<String>, Option<String>) = conn.query_row(
+            "SELECT command, command_tokens, alias FROM records WHERE client_id = ?1",
             params!["imported"],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
 
         assert_eq!(cmd, Some("vim file.txt".to_string()));
         assert_eq!(tokens, Some(r#"["vim","file.txt"]"#.to_string()));
+        assert_eq!(alias, Some("editing".to_string()));
     }
 
     #[test]
     fn test_import_record_null_command() {
         let mut conn = setup();
-        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, None).unwrap();
+        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, None, None).unwrap();
 
-        let (cmd, tokens): (Option<String>, Option<String>) = conn.query_row(
-            "SELECT command, command_tokens FROM records WHERE client_id = ?1",
+        let (cmd, tokens, alias): (Option<String>, Option<String>, Option<String>) = conn.query_row(
+            "SELECT command, command_tokens, alias FROM records WHERE client_id = ?1",
             params!["imported"],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
 
         assert_eq!(cmd, None);
         assert_eq!(tokens, None);
+        assert_eq!(alias, None);
     }
 }

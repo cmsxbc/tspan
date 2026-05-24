@@ -41,6 +41,10 @@ enum Commands {
     Import {
         #[arg(long, default_value = "imported")]
         client_id: String,
+        #[arg(long)]
+        command: Option<String>,
+        #[arg(long)]
+        alias: Option<String>,
         path: String,
     },
     /// Generate a new API token
@@ -71,9 +75,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::create_pool(&cli.database)?;
 
     match cli.command {
-        Some(Commands::Import { client_id, path }) => {
+        Some(Commands::Import { client_id, command, alias, path }) => {
             println!("Importing from {} as client '{}'...", path, client_id);
-            let result = importer::import_from_directory(&pool, &client_id, &path).await?;
+            let result = importer::import_from_directory(&pool, &client_id, &path, command.as_deref(), alias.as_deref()).await?;
             println!("Imported: {}, Failed: {}", result.imported, result.failed);
             for err in &result.errors {
                 eprintln!("  ERROR: {}", err);

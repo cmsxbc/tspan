@@ -55,6 +55,8 @@ pub struct OrphanedSession {
 pub struct ImportReq {
     pub path: String,
     pub client_id: Option<String>,
+    pub command: Option<String>,
+    pub alias: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -475,7 +477,7 @@ async fn api_import(
         return Err(unauthorized_web_response());
     }
     let client_id = req.client_id.unwrap_or_else(|| "default".to_string());
-    let result = crate::importer::import_from_directory(&state.pool, &client_id, &req.path).await.map_err(|e| {
+    let result = crate::importer::import_from_directory(&state.pool, &client_id, &req.path, req.command.as_deref(), req.alias.as_deref()).await.map_err(|e| {
         tracing::error!("Import error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
