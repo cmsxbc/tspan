@@ -41,10 +41,10 @@ FROM records WHERE status = 'completed'
 
 Web 界面的 Basic Auth 用户名/密码是全局的。所有用户看到的都是同样的聚合数据。
 
-### 5. wydrun 的 client_id 默认是 hostname
+### 5. tspanrun 的 client_id 默认是 hostname
 
 ```bash
-CLIENT_ID="${WYDRUN_CLIENT:-$(hostname)}"
+CLIENT_ID="${TSPANRUN_CLIENT:-$(hostname)}"
 ```
 
 同一 host 上的所有用户默认使用相同的 `client_id`，进一步加剧了混淆。
@@ -82,7 +82,7 @@ data/
 | `auth.rs` | `verify_api_token_sync` 返回 `(bool, client_id)`；`check_api_auth` 返回 `client_id` |
 | `server.rs` | 所有 handler 根据 `client_id` 获取对应的数据库连接 |
 | `main.rs` | `token-generate` 子命令增加 `--client-id` 参数；创建数据库时自动创建目录 |
-| `wydrun` | `client_id` 参数变为可选；如果不传，由 server 根据 token 自动推断 |
+| `tspanrun` | `client_id` 参数变为可选；如果不传，由 server 根据 token 自动推断 |
 
 ### 数据迁移
 

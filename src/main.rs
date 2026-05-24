@@ -13,7 +13,7 @@ use auth::AuthConfig;
 use server::AppState;
 
 #[derive(Parser)]
-#[command(name = "wyd-server")]
+#[command(name = "tspan-server")]
 #[command(about = "What You Are Doing - Activity Tracker Server")]
 struct Cli {
     #[command(subcommand)]
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "wyd_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "tspan_server=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Commands::TokenGenerate { client_id, description }) => {
-            let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+            let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
             let mut conn = pool.lock().unwrap();
             db::add_api_token(&mut conn, &token, &client_id, description.as_deref())?;
             println!("Generated token: {}", token);
@@ -109,10 +109,10 @@ async fn main() -> anyhow::Result<()> {
                 let mut conn = pool.lock().unwrap();
                 let tokens = db::list_api_tokens(&mut conn)?;
                 if tokens.is_empty() {
-                    let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+                    let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
                     db::add_api_token(&mut conn, &token, "default", Some("auto-generated initial token"))?;
                     println!("WARNING: No API tokens found. Auto-generated initial token: {}", token);
-                    println!("Set WYDRUN_TOKEN environment variable to this value.");
+                    println!("Set TSPANRUN_TOKEN environment variable to this value.");
                 }
             }
 

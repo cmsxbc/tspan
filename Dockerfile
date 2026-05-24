@@ -21,9 +21,9 @@ RUN cargo build --release
 # Runtime stage (minimal image)
 FROM gcr.io/distroless/cc-debian12
 WORKDIR /app
-COPY --from=builder /app/target/release/wyd-server /app/wyd-server
+COPY --from=builder /app/target/release/tspan-server /app/tspan-server
 # data.db will be mounted via PVC to /app/data/
 ENV DATABASE_URL=/app/data/data.db
 ENV BIND_ADDR=0.0.0.0:8080
 EXPOSE 8080
-ENTRYPOINT ["/app/wyd-server"]
+ENTRYPOINT ["/app/tspan-server"]

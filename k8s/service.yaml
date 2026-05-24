@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: wyd-server
-  namespace: wyd-system
+  name: tspan-server
+  namespace: tspan-system
 spec:
   selector:
-    app: wyd-server
+    app: tspan-server
   ports:
     - protocol: TCP
       port: 80

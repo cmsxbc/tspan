@@ -164,7 +164,7 @@ async fn resolve_auth(
 fn unauthorized_web_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Basic realm=\"wyd-admin\"")],
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"tspan-admin\"")],
         "Unauthorized",
     ).into_response()
 }
@@ -491,7 +491,7 @@ async fn api_backup(
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
-    let temp_path = format!("/tmp/wyd_backup_{}.db", chrono::Utc::now().timestamp());
+    let temp_path = format!("/tmp/tspan_backup_{}.db", chrono::Utc::now().timestamp());
     {
         let conn = state.pool.lock().unwrap();
         let mut dest = rusqlite::Connection::open(&temp_path).map_err(|e| {
@@ -518,14 +518,14 @@ async fn api_backup(
     Ok((
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"wyd-backup.db\""),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"tspan-backup.db\""),
         ],
         data,
     ).into_response())
 }
 
 const INDEX_HTML: &str = r##"<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>WYD Stats</title>
+<html><head><meta charset="utf-8"><title>TSPAN Stats</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;padding:20px 40px;color:#333;background:#f6f8fa}
 .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
@@ -635,11 +635,11 @@ const COLOR_SCHEMES = {
   ocean:   { name: '海洋',   empty: '#f6f8fa', low: '#a5d8ff', medium: '#74c0fc', high: '#339af0' }
 };
 function getColorScheme() {
-  const saved = localStorage.getItem('wyd_color_scheme');
+  const saved = localStorage.getItem('tspan_color_scheme');
   return COLOR_SCHEMES[saved] || COLOR_SCHEMES.heatmap;
 }
 function changeColorScheme(name) {
-  localStorage.setItem('wyd_color_scheme', name);
+  localStorage.setItem('tspan_color_scheme', name);
   loadAll();
 }
 function getFilters() {
@@ -656,7 +656,7 @@ function buildParams(obj) {
   if(f.client_id) p.set('client_id', f.client_id);
   if(f.alias) p.set('alias', f.alias);
   if(f.command) p.set('command', f.command);
-  const scheme = localStorage.getItem('wyd_color_scheme');
+  const scheme = localStorage.getItem('tspan_color_scheme');
   if(scheme) p.set('color_scheme', scheme);
   return p;
 }
@@ -670,7 +670,7 @@ function readUrlFilters() {
   if(alias) document.getElementById('filter-alias').value = alias;
   if(command) document.getElementById('filter-command').value = command;
   if(per_page) document.getElementById('filter-perpage').value = per_page;
-  const savedScheme = localStorage.getItem('wyd_color_scheme');
+  const savedScheme = localStorage.getItem('tspan_color_scheme');
   if(savedScheme) document.getElementById('filter-scheme').value = savedScheme;
 }
 function writeUrlFilters() {
@@ -1169,7 +1169,7 @@ async fn web_admin(
 
     let mut html = String::new();
     html.push_str(r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>WYD Admin</title>
+<html><head><meta charset="utf-8"><title>TSPAN Admin</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;padding:20px 40px;color:#333;background:#f6f8fa}
 .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
@@ -1367,7 +1367,7 @@ async fn api_create_token(
         return Err(unauthorized_web_response());
     }
     let client_id = req.client_id.unwrap_or_else(|| "default".to_string());
-    let token = format!("wyd_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+    let token = format!("tspan_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
     let mut conn = state.pool.lock().unwrap();
     db::add_api_token(&mut conn, &token, &client_id, req.description.as_deref()).map_err(|e| {
         tracing::error!("DB error: {}", e);

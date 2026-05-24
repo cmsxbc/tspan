@@ -1,13 +1,13 @@
-# AGENTS.md — What You Are Doing (WYD)
+# AGENTS.md — What You Are Doing (TSPAN)
 
 > This file is intended for AI coding agents. It describes the project structure, build process, conventions, and architectural decisions based on the actual source code.
 
 ## Project Overview
 
-**What You Are Doing (WYD)** is a client/server activity tracker. Users wrap shell commands with a bash client (`wydrun`), which notifies a Rust server of session start/end events. The server stores data in SQLite and serves a web dashboard with statistics, SVG activity calendars, and admin tools.
+**What You Are Doing (TSPAN)** is a client/server activity tracker. Users wrap shell commands with a bash client (`tspanrun`), which notifies a Rust server of session start/end events. The server stores data in SQLite and serves a web dashboard with statistics, SVG activity calendars, and admin tools.
 
 - **Server**: Rust (axum) + SQLite (WAL mode) + native SVG generation
-- **Client**: Bash wrapper (`wydrun`) using `curl`
+- **Client**: Bash wrapper (`tspanrun`) using `curl`
 - **Web UI**: Single-page dashboard with embedded vanilla JavaScript (no frontend framework)
 - **Charts**: Pure SVG generated server-side (no external charting library)
 
@@ -23,7 +23,7 @@
 | Password Hashing | bcrypt (optional; plaintext fallback supported) |
 | Serialization | serde + serde_json |
 | CLI Parsing | clap v4 |
-| Configuration | Command-line args + env vars (`WEB_PASSWORD`, `WYDRUN_*`) |
+| Configuration | Command-line args + env vars (`WEB_PASSWORD`, `TSPANRUN_*`) |
 | Logging | tracing + tracing-subscriber with env-filter |
 
 ## Project Structure
@@ -41,9 +41,9 @@
 │   ├── svg_calendar.rs     # Native SVG calendar generation (GitHub-style contribution graph)
 │   ├── markdown.rs         # Markdown report with base64-encoded SVGs
 │   └── importer.rs         # Historical record importer from text files
-├── wydrun                  # Bash client wrapper script
+├── tspanrun                  # Bash client wrapper script
 ├── scripts/
-│   └── wyd-rofi-drun       # rofi modi script for desktop app tracking
+│   └── tspan-rofi-drun       # rofi modi script for desktop app tracking
 ├── k8s/                    # Kubernetes manifests
 ├── docs/
 │   └── multi-user-assessment.md  # Analysis of multi-user isolation (Chinese)
@@ -73,7 +73,7 @@ WEB_PASSWORD=secret ./dev.sh --bind 127.0.0.1:3000
 
 ```bash
 cargo build --release
-# Binary: ./target/release/wyd-server
+# Binary: ./target/release/tspan-server
 ```
 
 ### Database Initialization
@@ -89,12 +89,12 @@ SQLite runs in WAL mode (`PRAGMA journal_mode=WAL`).
 
 ```bash
 # Generate an API token
-./target/release/wyd-server token-generate "agent-1"
-./target/release/wyd-server token-generate --client-id agent-2 "agent-2"
+./target/release/tspan-server token-generate "agent-1"
+./target/release/tspan-server token-generate --client-id agent-2 "agent-2"
 
 # List / revoke tokens
-./target/release/wyd-server token-list
-./target/release/wyd-server token-revoke <token>
+./target/release/tspan-server token-list
+./target/release/tspan-server token-revoke <token>
 ```
 
 If no tokens exist when the server starts, it auto-generates one and prints it to stdout.
@@ -102,7 +102,7 @@ If no tokens exist when the server starts, it auto-generates one and prints it t
 ### Import Historical Data
 
 ```bash
-./target/release/wyd-server import ./reference/records/ --client-id imported
+./target/release/tspan-server import ./reference/records/ --client-id imported
 ```
 
 The importer expects `.txt` files where:
@@ -113,11 +113,11 @@ The importer expects `.txt` files where:
 ### Using the Client Wrapper
 
 ```bash
-export WYDRUN_SERVER="http://localhost:8080"
-export WYDRUN_TOKEN="wyd_xxxxx"
+export TSPANRUN_SERVER="http://localhost:8080"
+export TSPANRUN_TOKEN="tspan_xxxxx"
 
-./wydrun vim file.txt
-WYDRUN_ALIAS="模型训练" ./wydrun python train.py
+./tspanrun vim file.txt
+TSPANRUN_ALIAS="模型训练" ./tspanrun python train.py
 ```
 
 ## Runtime Architecture
@@ -221,7 +221,7 @@ SQLite is accessed through a single shared connection wrapped in `Arc<Mutex<Conn
 **There are currently no automated tests in this project** (no `tests/` directory, no `#[cfg(test)]` modules). All validation is manual via:
 
 1. Building and running the server
-2. Using `wydrun` to track commands
+2. Using `tspanrun` to track commands
 3. Checking the web dashboard
 4. Importing historical data and verifying stats
 
@@ -235,7 +235,7 @@ When making changes, verify by:
 ### Docker
 
 ```bash
-docker build -t wyd-server:latest .
+docker build -t tspan-server:latest .
 ```
 
 Supports a `CARGO_REGISTRY` build arg for mirrors (e.g., Tsinghua).
@@ -247,11 +247,11 @@ kubectl apply -f k8s/
 ```
 
 Manifests:
-- `namespace.yaml`: `wyd-system`
+- `namespace.yaml`: `tspan-system`
 - `pvc.yaml`: 1Gi persistent volume for SQLite
 - `deployment.yaml`: Single replica, distroless image, probes on `/`
 - `service.yaml`: ClusterIP on port 80 → 8080
-- `ingress.yaml`: nginx ingress for `wyd.local`
+- `ingress.yaml`: nginx ingress for `tspan.local`
 - `cronjob-backup.yaml`: Daily at 02:00, downloads DB backup via `/api/admin/backup`
 
 **Security note**: The K8s manifests currently embed `WEB_PASSWORD` as plaintext. A production deployment should use Kubernetes Secrets.

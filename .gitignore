@@ -13,7 +13,7 @@ data.db-wal
 Cargo.lock
 
 # 本地配置文件
-wyd-server.local.toml
+tspan-server.local.toml
 *.local.toml
 
 # IDE

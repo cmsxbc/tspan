@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: wyd-server
-  namespace: wyd-system
+  name: tspan-server
+  namespace: tspan-system
   labels:
-    app: wyd-server
+    app: tspan-server
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: wyd-server
+      app: tspan-server
   template:
     metadata:
       labels:
-        app: wyd-server
+        app: tspan-server
     spec:
       containers:
-        - name: wyd-server
-          image: wyd-server:latest
+        - name: tspan-server
+          image: tspan-server:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -28,13 +28,13 @@ spec:
             - name: BIND_ADDR
               value: "0.0.0.0:8080"
             - name: RUST_LOG
-              value: "wyd_server=info,tower_http=info"
+              value: "tspan_server=info,tower_http=info"
             - name: WEB_PASSWORD
               value: "changeme"
               # TODO: replace with a Kubernetes Secret reference in production
               # valueFrom:
               #   secretKeyRef:
-              #     name: wyd-web-auth
+              #     name: tspan-web-auth
               #     key: password
           volumeMounts:
             - name: data
@@ -61,4 +61,4 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: wyd-data
+            claimName: tspan-data

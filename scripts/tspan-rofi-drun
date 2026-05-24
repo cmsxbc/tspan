@@ -1,19 +1,19 @@
 #!/bin/bash
-# WYD Rofi Desktop Runner
-# Usage: rofi -modi drun:"$PWD/scripts/wyd-rofi-drun" -show drun
+# TSPAN Rofi Desktop Runner
+# Usage: rofi -modi drun:"$PWD/scripts/tspan-rofi-drun" -show drun
 #
 # Or replace your existing rofi shortcut with:
-#   rofi -modi drun:/path/to/wyd-rofi-drun -show drun
+#   rofi -modi drun:/path/to/tspan-rofi-drun -show drun
 
 set -e
 
 # ---- config ----
-export WYDRUN_SERVER="${WYDRUN_SERVER:-http://localhost:8080}"
-export WYDRUN_TOKEN="${WYDRUN_TOKEN:-}"
-export WYDRUN_CLIENT="${WYDRUN_CLIENT:-$(hostname)}"
+export TSPANRUN_SERVER="${TSPANRUN_SERVER:-http://localhost:8080}"
+export TSPANRUN_TOKEN="${TSPANRUN_TOKEN:-}"
+export TSPANRUN_CLIENT="${TSPANRUN_CLIENT:-$(hostname)}"
 
-# Find the real wydrun path
-WYDRUN="${WYDRUN_PATH:-$(command -v wydrun || echo "$HOME/what-you-are-doing/wydrun")}"
+# Find the real tspanrun path
+TSPANRUN="${TSPANRUN_PATH:-$(command -v tspanrun || echo "$HOME/what-you-are-doing/tspanrun")}"
 
 # Desktop directories to scan
 DESKTOP_DIRS=(
@@ -23,7 +23,7 @@ DESKTOP_DIRS=(
 )
 
 # Cache file for performance
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/wyd-rofi-drun"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tspan-rofi-drun"
 mkdir -p "$CACHE_DIR"
 CACHE_FILE="$CACHE_DIR/desktop.cache"
 
@@ -97,12 +97,12 @@ while IFS=$'\t' read -r name exec icon file; do
 done < "$CACHE_FILE"
 
 if [[ -z "$exec_cmd" ]]; then
-    notify-send "WYD" "Could not find command for: $selected" 2>/dev/null || echo "Error: command not found" >&2
+    notify-send "TSPAN" "Could not find command for: $selected" 2>/dev/null || echo "Error: command not found" >&2
     exit 1
 fi
 
-# Execute via wydrun, with the app name as alias for display
-export WYDRUN_ALIAS="$selected"
+# Execute via tspanrun, with the app name as alias for display
+export TSPANRUN_ALIAS="$selected"
 # Use bash -c to properly handle multi-word exec strings,
 # but set alias so the recorded command is meaningful
-exec "$WYDRUN" bash -c "exec $exec_cmd"
+exec "$TSPANRUN" bash -c "exec $exec_cmd"

@@ -15,4 +15,4 @@ fi
 
 export WEB_PASSWORD="${WEB_PASSWORD:-changeme}"
 echo "[watch] Watching src/ for changes..."
-cargo watch -x 'build' -s './target/debug/wyd-server'
+cargo watch -x 'build' -s './target/debug/tspan-server'

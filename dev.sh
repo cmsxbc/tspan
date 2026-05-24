@@ -10,8 +10,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Kill any existing wyd-server process
-pkill -f 'wyd-server' 2>/dev/null || true
+# Kill any existing tspan-server process
+pkill -f 'tspan-server' 2>/dev/null || true
 sleep 0.5
 
 echo "[dev] Building..."
@@ -19,4 +19,4 @@ cargo build 2>&1
 
 echo "[dev] Starting server..."
 export WEB_PASSWORD="${WEB_PASSWORD:-changeme}"
-./target/debug/wyd-server "$@"
+./target/debug/tspan-server "$@"
