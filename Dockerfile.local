@@ -1,0 +1,8 @@
+# Fast local build: assumes binary already compiled via `cargo build --release`
+FROM gcr.io/distroless/cc-debian12
+WORKDIR /app
+COPY target/release/tspan-server /app/tspan-server
+ENV DATABASE_URL=/app/data/data.db
+ENV BIND_ADDR=0.0.0.0:8080
+EXPOSE 8080
+ENTRYPOINT ["/app/tspan-server"]

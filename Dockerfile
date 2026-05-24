@@ -16,7 +16,9 @@ RUN if [ -n "$CARGO_REGISTRY" ]; then \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release
 
 # Runtime stage (minimal image)
 FROM gcr.io/distroless/cc-debian12
