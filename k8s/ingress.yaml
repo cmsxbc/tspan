@@ -6,7 +6,9 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  # Only set ingressClassName if your cluster requires it.
+  # If omitted, the cluster's default Ingress Controller is used.
+  # ingressClassName: nginx
   rules:
     - host: tspan.local
       http:

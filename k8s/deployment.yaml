@@ -18,7 +18,7 @@ spec:
       containers:
         - name: tspan-server
           image: tspan-server:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http
@@ -47,14 +47,12 @@ spec:
               memory: "256Mi"
               cpu: "200m"
           livenessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: 8080
             initialDelaySeconds: 2
             periodSeconds: 10

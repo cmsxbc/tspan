@@ -36,5 +36,6 @@ spec:
                   mountPath: /backup
           volumes:
             - name: backup
-              emptyDir: {}
+              persistentVolumeClaim:
+                claimName: tspan-backup
           restartPolicy: OnFailure
