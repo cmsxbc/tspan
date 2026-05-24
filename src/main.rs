@@ -13,7 +13,7 @@ use auth::AuthConfig;
 use server::AppState;
 
 #[derive(Parser)]
-#[command(name = "tspan-server")]
+#[command(name = "tspan-server", version)]
 #[command(about = "What You Are Doing - Activity Tracker Server")]
 struct Cli {
     #[command(subcommand)]
