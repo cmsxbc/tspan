@@ -91,6 +91,12 @@ pub fn ensure_client(conn: &mut Connection, client_id: &str) -> SqlResult<()> {
     Ok(())
 }
 
+pub fn command_to_tokens(command: &str) -> Option<String> {
+    let tokens: Vec<String> = shlex::split(command)
+        .unwrap_or_else(|| command.split_whitespace().map(String::from).collect());
+    serde_json::to_string(&tokens).ok()
+}
+
 pub fn start_session(
     conn: &mut Connection,
     client_id: &str,
@@ -100,10 +106,11 @@ pub fn start_session(
 ) -> SqlResult<i64> {
     ensure_client(conn, client_id)?;
     let now = Utc::now().timestamp();
+    let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
     conn.execute(
-        "INSERT INTO records (client_id, start_time, command, alias, process_id, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?2)",
-        params![client_id, now, command, alias, process_id],
+        "INSERT INTO records (client_id, start_time, command, command_tokens, alias, process_id, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?2)",
+        params![client_id, now, command, tokens_json.as_deref(), alias, process_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -343,12 +350,14 @@ pub fn import_record(
     start_time: i64,
     end_time: i64,
     duration_seconds: i64,
+    command: Option<&str>,
 ) -> SqlResult<()> {
     ensure_client(conn, client_id)?;
+    let tokens_json = command.and_then(|cmd| command_to_tokens(cmd));
     conn.execute(
-        "INSERT INTO records (client_id, start_time, end_time, duration_seconds, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?2)",
-        params![client_id, start_time, end_time, duration_seconds],
+        "INSERT INTO records (client_id, start_time, end_time, duration_seconds, command, command_tokens, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'completed', ?2)",
+        params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref()],
     )?;
     Ok(())
 }

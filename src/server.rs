@@ -17,6 +17,7 @@ use crate::markdown::generate_markdown_report;
 pub struct AppState {
     pub pool: DbPool,
     pub auth: AuthConfig,
+    pub command_token_limit: usize,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ pub struct FilterQuery {
     pub alias: Option<String>,
     pub command: Option<String>,
     pub color_scheme: Option<String>,
+    pub depth: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -327,8 +329,9 @@ async fn api_get_stats_by_command(
         return Err(unauthorized_web_response());
     }
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
+    let depth = q.depth.unwrap_or(0);
     let mut conn = state.pool.lock().unwrap();
-    let data = stats::compute_stats_by_command(&mut conn, &client_id).map_err(|e| {
+    let data = stats::compute_stats_by_command(&mut conn, &client_id, depth, state.command_token_limit).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -622,7 +625,7 @@ th{font-size:12px;color:#666;font-weight:600}
 </div>
 <div class="card" id="card-by-client"><h2>Stats by Client</h2><div id="client-stats"></div></div>
 <div class="card" id="card-by-alias"><h2>Stats by Alias</h2><div id="alias-stats"></div></div>
-<div class="card" id="card-by-command"><h2>Stats by Command</h2><div id="command-stats"></div></div>
+<div class="card" id="card-by-command"><h2>Stats by Command</h2><div style="margin-bottom:8px;"><select id="command-depth" onchange="loadCommandStats()" style="padding:4px 8px;border-radius:4px;border:1px solid #d0d7de;"><option value="0">完整命令</option><option value="1">第1级</option><option value="2">第2级</option><option value="3">第3级</option><option value="4">第4级</option><option value="5">第5级</option></select></div><div id="command-stats"></div></div>
 <div class="card"><h2>Records</h2>
 <div id="records-table"></div>
 <div id="records-paging" style="margin-top:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"></div>
@@ -670,6 +673,8 @@ function readUrlFilters() {
   if(alias) document.getElementById('filter-alias').value = alias;
   if(command) document.getElementById('filter-command').value = command;
   if(per_page) document.getElementById('filter-perpage').value = per_page;
+  const cmdDepth = params.get('depth');
+  if(cmdDepth) document.getElementById('command-depth').value = cmdDepth;
   const savedScheme = localStorage.getItem('tspan_color_scheme');
   if(savedScheme) document.getElementById('filter-scheme').value = savedScheme;
 }
@@ -936,7 +941,10 @@ async function loadAliasStats() {
   document.getElementById('alias-stats').innerHTML = html;
 }
 async function loadCommandStats() {
-  const r = await fetch('/api/stats/by-command?' + buildParams({}).toString());
+  const depthEl = document.getElementById('command-depth');
+  const depth = depthEl ? depthEl.value : '0';
+  const extra = depth !== '0' ? {depth: depth} : {};
+  const r = await fetch('/api/stats/by-command?' + buildParams(extra).toString());
   if(!r.ok) return;
   const data = await r.json();
   let html = '<table><tr><th>Command</th><th>Total</th><th>Times</th><th>Mean</th></tr>';

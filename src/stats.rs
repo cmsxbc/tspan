@@ -344,48 +344,57 @@ pub fn compute_stats_by_alias(conn: &mut Connection, client_id: &str) -> anyhow:
     Ok(rows)
 }
 
-pub fn compute_stats_by_command(conn: &mut Connection, client_id: &str) -> anyhow::Result<Vec<CommandStat>> {
+pub fn compute_stats_by_command(
+    conn: &mut Connection,
+    client_id: &str,
+    depth: usize,
+    token_limit: usize,
+) -> anyhow::Result<Vec<CommandStat>> {
     let is_global = client_id == "__global__";
-    let sql = if is_global {
-        "SELECT command, COALESCE(SUM(duration_seconds), 0), COUNT(*)
-         FROM records WHERE status = 'completed' AND command IS NOT NULL AND command != ''
-         GROUP BY command
-         ORDER BY 2 DESC"
+    let actual_depth = if depth == 0 { 0 } else { depth.min(token_limit) };
+
+    let (group_expr, where_extra): (String, &str) = if actual_depth == 0 {
+        ("command".to_string(), "AND command IS NOT NULL AND command != ''")
     } else {
-        "SELECT command, COALESCE(SUM(duration_seconds), 0), COUNT(*)
-         FROM records WHERE status = 'completed' AND client_id = ?1 AND command IS NOT NULL AND command != ''
-         GROUP BY command
-         ORDER BY 2 DESC"
+        let mut expr = "json_extract(command_tokens, '$[0]')".to_string();
+        for i in 1..actual_depth {
+            expr.push_str(&format!(
+                " || COALESCE(' ' || json_extract(command_tokens, '$[{}]'), '')",
+                i
+            ));
+        }
+        (expr, "AND command_tokens IS NOT NULL")
     };
-    let mut stmt = conn.prepare(sql)?;
+
+    let client_filter = if is_global { "" } else { "AND client_id = ?1" };
+    let sql = format!(
+        "SELECT {}, COALESCE(SUM(duration_seconds), 0), COUNT(*)
+         FROM records
+         WHERE status = 'completed' {} {}
+         GROUP BY {}
+         ORDER BY 2 DESC",
+        group_expr, client_filter, where_extra, group_expr
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let row_mapper = |row: &rusqlite::Row| {
+        let total_seconds: i64 = row.get(1)?;
+        let total_times: i64 = row.get(2)?;
+        let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
+        Ok(CommandStat {
+            command: row.get(0)?,
+            total_seconds,
+            total_times,
+            mean_seconds: mean,
+            total_seconds_hr: human_readable_time(total_seconds),
+            mean_seconds_hr: human_readable_time(mean),
+        })
+    };
+
     let rows = if is_global {
-        stmt.query_map([], |row| {
-            let total_seconds: i64 = row.get(1)?;
-            let total_times: i64 = row.get(2)?;
-            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
-            Ok(CommandStat {
-                command: row.get(0)?,
-                total_seconds,
-                total_times,
-                mean_seconds: mean,
-                total_seconds_hr: human_readable_time(total_seconds),
-                mean_seconds_hr: human_readable_time(mean),
-            })
-        })?.collect::<Result<Vec<_>, _>>()?
+        stmt.query_map([], row_mapper)?.collect::<Result<Vec<_>, _>>()?
     } else {
-        stmt.query_map([client_id], |row| {
-            let total_seconds: i64 = row.get(1)?;
-            let total_times: i64 = row.get(2)?;
-            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
-            Ok(CommandStat {
-                command: row.get(0)?,
-                total_seconds,
-                total_times,
-                mean_seconds: mean,
-                total_seconds_hr: human_readable_time(total_seconds),
-                mean_seconds_hr: human_readable_time(mean),
-            })
-        })?.collect::<Result<Vec<_>, _>>()?
+        stmt.query_map([client_id], row_mapper)?.collect::<Result<Vec<_>, _>>()?
     };
     Ok(rows)
 }

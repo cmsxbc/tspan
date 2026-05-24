@@ -61,9 +61,11 @@ pub async fn import_from_directory(pool: &DbPool, client_id: &str, dir: &str) ->
         };
 
         let end_time = start_time + duration_seconds;
+        let command = lines[0].trim();
+        let command_opt = if command.is_empty() { None } else { Some(command) };
 
         let mut conn = pool.lock().unwrap();
-        if let Err(e) = import_record(&mut conn, client_id, start_time, end_time, duration_seconds) {
+        if let Err(e) = import_record(&mut conn, client_id, start_time, end_time, duration_seconds, command_opt) {
             failed += 1;
             errors.push(format!("{}: db error {}", filename, e));
         } else {

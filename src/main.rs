@@ -30,6 +30,9 @@ struct Cli {
 
     #[arg(long, default_value = "changeme", env = "WEB_PASSWORD")]
     web_password: String,
+
+    #[arg(long, default_value = "5")]
+    command_token_limit: usize,
 }
 
 #[derive(Subcommand)]
@@ -121,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
                 web_password_hash: cli.web_password.clone(),
             };
 
-            let state = AppState { pool, auth };
+            let state = AppState { pool, auth, command_token_limit: cli.command_token_limit };
             let app = server::create_router(state);
 
             let listener = tokio::net::TcpListener::bind(&cli.bind).await?;
