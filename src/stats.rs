@@ -824,3 +824,131 @@ pub fn compute_hourly_heatmap(
 
     Ok(HourlyHeatmap { grid, max_seconds })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{init_db, start_session};
+    use rusqlite::{Connection, params};
+
+    fn setup() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_db(&mut conn).unwrap();
+        conn
+    }
+
+    fn insert_completed(conn: &mut Connection, client_id: &str, command: &str, duration: i64) {
+        let id = start_session(conn, client_id, Some(command), None, None).unwrap();
+        conn.execute(
+            "UPDATE records SET end_time = start_time + ?1, duration_seconds = ?1, status = 'completed' WHERE id = ?2",
+            params![duration, id],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_by_command_depth_0_full_command() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "perf stats record", 100);
+        insert_completed(&mut conn, "c1", "perf stats report", 200);
+        insert_completed(&mut conn, "c1", "python train.py", 300);
+
+        let stats = compute_stats_by_command(&mut conn, "c1", 0, 5).unwrap();
+        assert_eq!(stats.len(), 3);
+        // Ordered by total_seconds DESC
+        assert_eq!(stats[0].command, "python train.py");
+        assert_eq!(stats[0].total_seconds, 300);
+        assert_eq!(stats[1].command, "perf stats report");
+        assert_eq!(stats[1].total_seconds, 200);
+        assert_eq!(stats[2].command, "perf stats record");
+        assert_eq!(stats[2].total_seconds, 100);
+    }
+
+    #[test]
+    fn test_by_command_depth_1_base() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "perf stats record", 100);
+        insert_completed(&mut conn, "c1", "perf stats report", 200);
+        insert_completed(&mut conn, "c1", "python train.py", 300);
+
+        let stats = compute_stats_by_command(&mut conn, "c1", 1, 5).unwrap();
+        assert_eq!(stats.len(), 2);
+        // python = 300, perf = 300 (100+200)
+        let python = stats.iter().find(|s| s.command == "python").unwrap();
+        let perf = stats.iter().find(|s| s.command == "perf").unwrap();
+        assert_eq!(python.total_seconds, 300);
+        assert_eq!(perf.total_seconds, 300);
+    }
+
+    #[test]
+    fn test_by_command_depth_2_sub() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "perf stats record", 100);
+        insert_completed(&mut conn, "c1", "perf stats report", 200);
+        insert_completed(&mut conn, "c1", "python train.py", 300);
+
+        let stats = compute_stats_by_command(&mut conn, "c1", 2, 5).unwrap();
+        assert_eq!(stats.len(), 2);
+        let perf_stats = stats.iter().find(|s| s.command == "perf stats").unwrap();
+        let python_train = stats.iter().find(|s| s.command == "python train.py").unwrap();
+        assert_eq!(perf_stats.total_seconds, 300);
+        assert_eq!(python_train.total_seconds, 300);
+    }
+
+    #[test]
+    fn test_by_command_depth_exceeds_token_limit() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "perf stats record", 100);
+        insert_completed(&mut conn, "c1", "perf stats report", 200);
+
+        // limit=1 means depth=2 should behave like depth=1
+        let stats = compute_stats_by_command(&mut conn, "c1", 2, 1).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].command, "perf");
+        assert_eq!(stats[0].total_seconds, 300);
+    }
+
+    #[test]
+    fn test_by_command_global_aggregation() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "perf stats", 100);
+        insert_completed(&mut conn, "c2", "perf stats", 200);
+
+        let stats = compute_stats_by_command(&mut conn, "__global__", 1, 5).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].command, "perf");
+        assert_eq!(stats[0].total_seconds, 300);
+    }
+
+    #[test]
+    fn test_by_command_quoted_args() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "ls \"my documents\"", 100);
+        insert_completed(&mut conn, "c1", "ls downloads", 200);
+
+        let stats = compute_stats_by_command(&mut conn, "c1", 2, 5).unwrap();
+        assert_eq!(stats.len(), 2);
+        let docs = stats.iter().find(|s| s.command == "ls my documents").unwrap();
+        let downloads = stats.iter().find(|s| s.command == "ls downloads").unwrap();
+        assert_eq!(docs.total_seconds, 100);
+        assert_eq!(downloads.total_seconds, 200);
+    }
+
+    #[test]
+    fn test_by_command_single_token() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "vim", 100);
+        insert_completed(&mut conn, "c1", "vim", 200);
+
+        let stats_d0 = compute_stats_by_command(&mut conn, "c1", 0, 5).unwrap();
+        assert_eq!(stats_d0.len(), 1);
+        assert_eq!(stats_d0[0].command, "vim");
+
+        let stats_d1 = compute_stats_by_command(&mut conn, "c1", 1, 5).unwrap();
+        assert_eq!(stats_d1.len(), 1);
+        assert_eq!(stats_d1[0].command, "vim");
+
+        let stats_d2 = compute_stats_by_command(&mut conn, "c1", 2, 5).unwrap();
+        assert_eq!(stats_d2.len(), 1);
+        assert_eq!(stats_d2[0].command, "vim");
+    }
+}

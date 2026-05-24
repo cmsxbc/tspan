@@ -58,6 +58,7 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
             end_time        INTEGER,
             duration_seconds INTEGER,
             command         TEXT,
+            command_tokens  TEXT,
             alias           TEXT,
             process_id      INTEGER,
             status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'completed', 'discarded')),
@@ -71,6 +72,8 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
         -- Note: if migrating from old schema without client_id,
         -- manually run: ALTER TABLE api_tokens ADD COLUMN client_id TEXT NOT NULL DEFAULT 'default';
     ")?;
+    // Attempt to add command_tokens column for existing databases; ignore if already exists
+    let _ = conn.execute("ALTER TABLE records ADD COLUMN command_tokens TEXT", []);
     Ok(())
 }
 
@@ -360,4 +363,111 @@ pub fn import_record(
         params![client_id, start_time, end_time, duration_seconds, command, tokens_json.as_deref()],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_db(&mut conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_command_to_tokens_simple() {
+        assert_eq!(
+            command_to_tokens("perf stats record"),
+            Some(r#"["perf","stats","record"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_command_to_tokens_quoted() {
+        assert_eq!(
+            command_to_tokens("ls \"xxx yyy\""),
+            Some(r#"["ls","xxx yyy"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_command_to_tokens_single_quoted() {
+        assert_eq!(
+            command_to_tokens("echo 'hello world'"),
+            Some(r#"["echo","hello world"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_command_to_tokens_unclosed_quote_fallback() {
+        // shlex returns None for unclosed quote, falls back to split_whitespace
+        let result = command_to_tokens("echo \"hello").unwrap();
+        assert!(result.contains("echo"));
+        assert!(result.contains("\"hello"));
+    }
+
+    #[test]
+    fn test_command_to_tokens_empty() {
+        assert_eq!(command_to_tokens(""), Some(r#"[]"#.to_string()));
+    }
+
+    #[test]
+    fn test_start_session_stores_tokens() {
+        let mut conn = setup();
+        let id = start_session(&mut conn, "test-client", Some("python train.py --epochs 10"), None, None).unwrap();
+
+        let tokens: String = conn.query_row(
+            "SELECT command_tokens FROM records WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(tokens, r#"["python","train.py","--epochs","10"]"#);
+    }
+
+    #[test]
+    fn test_start_session_null_command_no_tokens() {
+        let mut conn = setup();
+        let id = start_session(&mut conn, "test-client", None, Some("alias-only"), None).unwrap();
+
+        let tokens: Option<String> = conn.query_row(
+            "SELECT command_tokens FROM records WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn test_import_record_stores_command_and_tokens() {
+        let mut conn = setup();
+        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, Some("vim file.txt")).unwrap();
+
+        let (cmd, tokens): (Option<String>, Option<String>) = conn.query_row(
+            "SELECT command, command_tokens FROM records WHERE client_id = ?1",
+            params!["imported"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+
+        assert_eq!(cmd, Some("vim file.txt".to_string()));
+        assert_eq!(tokens, Some(r#"["vim","file.txt"]"#.to_string()));
+    }
+
+    #[test]
+    fn test_import_record_null_command() {
+        let mut conn = setup();
+        import_record(&mut conn, "imported", 1609459200, 1609459260, 60, None).unwrap();
+
+        let (cmd, tokens): (Option<String>, Option<String>) = conn.query_row(
+            "SELECT command, command_tokens FROM records WHERE client_id = ?1",
+            params!["imported"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+
+        assert_eq!(cmd, None);
+        assert_eq!(tokens, None);
+    }
 }
