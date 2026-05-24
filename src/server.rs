@@ -137,6 +137,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/aliases", get(api_get_aliases))
         .route("/admin/import", post(api_import))
         .route("/admin/backup", get(api_backup))
+        .route("/admin/clients", get(api_admin_clients))
         .route("/admin/tokens", get(api_list_tokens).post(api_create_token))
         .route("/admin/tokens/:token", delete(api_revoke_token));
 
@@ -1175,6 +1176,14 @@ async fn web_admin(
         }
     };
 
+    let clients = match db::list_clients(&mut conn) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("DB error: {}", e);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response());
+        }
+    };
+
     let now = chrono::Utc::now().timestamp();
 
     let mut html = String::new();
@@ -1199,6 +1208,31 @@ th{font-size:12px;color:#666;font-weight:600}
 
     html.push_str(r#"<div class="nav"><a href="/">Home</a><a href="/admin">Admin</a></div>"#);
     html.push_str("<h1>Admin</h1>");
+
+    // Clients
+    html.push_str(r#"<div class="card"><h2>Clients</h2>"#);
+    if clients.is_empty() {
+        html.push_str("<p>No clients.</p>");
+    } else {
+        html.push_str(r#"<table><tr><th>ID</th><th>Name</th><th>Created</th><th>Last Seen</th></tr>"#);
+        for c in &clients {
+            let created = chrono::DateTime::from_timestamp(c.created_at, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_default();
+            let last_seen = chrono::DateTime::from_timestamp(c.last_seen, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_default();
+            html.push_str(&format!(
+                r#"<tr><td class="code">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&c.id),
+                c.name.as_deref().unwrap_or("-"),
+                created,
+                last_seen
+            ));
+        }
+        html.push_str("</table>");
+    }
+    html.push_str("</div>");
 
     // Orphaned sessions
     html.push_str(r#"<div class="card"><h2>Orphaned Sessions</h2>"#);
@@ -1347,6 +1381,21 @@ async fn api_list_clients(
     }
     let mut conn = state.pool.lock().unwrap();
     let clients = db::distinct_client_ids(&mut conn).map_err(|e| {
+        tracing::error!("DB error: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+    })?;
+    Ok(Json(clients))
+}
+
+async fn api_admin_clients(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<db::ClientInfo>>, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let mut conn = state.pool.lock().unwrap();
+    let clients = db::list_clients(&mut conn).map_err(|e| {
         tracing::error!("DB error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;

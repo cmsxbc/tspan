@@ -243,6 +243,29 @@ pub fn distinct_client_ids(conn: &mut Connection) -> SqlResult<Vec<String>> {
     rows.collect()
 }
 
+#[derive(serde::Serialize)]
+pub struct ClientInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub created_at: i64,
+    pub last_seen: i64,
+}
+
+pub fn list_clients(conn: &mut Connection) -> SqlResult<Vec<ClientInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, created_at, last_seen FROM clients ORDER BY last_seen DESC"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ClientInfo {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+            last_seen: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn list_records_page(
     conn: &mut Connection,
     client_id: &str,
