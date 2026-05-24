@@ -370,6 +370,14 @@ pub fn delete_api_token(conn: &mut Connection, token: &str) -> SqlResult<bool> {
     Ok(deleted > 0)
 }
 
+pub fn delete_record(conn: &mut Connection, id: i64) -> SqlResult<bool> {
+    let deleted = conn.execute(
+        "DELETE FROM records WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(deleted > 0)
+}
+
 pub fn import_record(
     conn: &mut Connection,
     client_id: &str,

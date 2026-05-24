@@ -138,6 +138,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/admin/import", post(api_import))
         .route("/admin/backup", get(api_backup))
         .route("/admin/clients", get(api_admin_clients))
+        .route("/admin/records/:id", delete(api_delete_record))
         .route("/admin/tokens", get(api_list_tokens).post(api_create_token))
         .route("/admin/tokens/:token", delete(api_revoke_token));
 
@@ -1290,6 +1291,9 @@ th{font-size:12px;color:#666;font-weight:600}
     }
     html.push_str("</div>");
 
+    // Records
+    html.push_str(r#"<div class="card"><h2>Records</h2><div id="admin-records-table"></div><div id="admin-records-paging" style="margin-top:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"></div></div>"#);
+
     html.push_str(r#"<script>
 async function endSession(id) {
     if(!confirm('End session ' + id + '?')) return;
@@ -1326,6 +1330,59 @@ async function revokeToken(token) {
     const r = await fetch('/api/admin/tokens/' + encodeURIComponent(token), {method:'DELETE'});
     if(r.ok) location.reload(); else alert('Failed: ' + r.status);
 }
+function fmtDate(ts) {
+    if(!ts) return '-';
+    const d = new Date(ts*1000);
+    return d.toISOString().slice(0,19).replace('T',' ');
+}
+function fmtDur(s) {
+    if(s==null) return '-';
+    const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+    let out='';
+    if(h>0) out+=String(h).padStart(2,'0')+' h ';
+    if(m>0 || h>0) out+=String(m).padStart(2,'0')+' m ';
+    out+=String(sec).padStart(2,'0')+' s';
+    return out;
+}
+let adminRecState = {page:1, perPage:20};
+async function loadAdminRecords() {
+    const params = new URLSearchParams({page: adminRecState.page, per_page: adminRecState.perPage});
+    const r = await fetch('/api/records?' + params.toString());
+    if(!r.ok) { document.getElementById('admin-records-table').innerHTML = '<p>Error: ' + r.status + '</p>'; return; }
+    const data = await r.json();
+    let html = '<table><tr><th>ID</th><th>Client</th><th>Alias</th><th>Command</th><th>Start</th><th>End</th><th class="col-dur">Duration</th><th>Action</th></tr>';
+    if(data.records.length===0) {
+        html += '<tr><td colspan="8" style="text-align:center;color:#666;">No records</td></tr>';
+    } else {
+        data.records.forEach(rec => {
+            html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td><td><button class="btn btn-discard" onclick="deleteRecord(' + rec.id + ')">Delete</button></td></tr>';
+        });
+    }
+    html += '</table>';
+    document.getElementById('admin-records-table').innerHTML = html;
+    let pg = '';
+    pg += '<span style="color:#666;font-size:12px;">Total: ' + data.total + ' | Page ' + data.page + ' / ' + data.total_pages + '</span>';
+    if(data.total_pages > 1) {
+        pg += '<span style="display:flex;gap:5px;">';
+        if(data.page > 1) pg += '<button class="btn" onclick="goAdminPage(' + (data.page-1) + ')">Prev</button>';
+        let start = Math.max(1, data.page - 3);
+        let end = Math.min(data.total_pages, data.page + 3);
+        for(let i=start;i<=end;i++) {
+            if(i===data.page) pg += '<button class="btn" style="background:#0969da;color:#fff;">' + i + '</button>';
+            else pg += '<button class="btn" onclick="goAdminPage(' + i + ')">' + i + '</button>';
+        }
+        if(data.page < data.total_pages) pg += '<button class="btn" onclick="goAdminPage(' + (data.page+1) + ')">Next</button>';
+        pg += '</span>';
+    }
+    document.getElementById('admin-records-paging').innerHTML = pg;
+}
+function goAdminPage(p) { adminRecState.page = p; loadAdminRecords(); }
+async function deleteRecord(id) {
+    if(!confirm('Permanently delete record ' + id + '?')) return;
+    const r = await fetch('/api/admin/records/' + id, {method:'DELETE'});
+    if(r.ok) { loadAdminRecords(); } else { alert('Failed: ' + r.status); }
+}
+loadAdminRecords();
 </script>"#);
 
     html.push_str("</body></html>");
@@ -1386,6 +1443,25 @@ async fn api_list_clients(
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
     Ok(Json(clients))
+}
+
+async fn api_delete_record(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, Response> {
+    if check_web_auth(&state, &headers).await.is_err() {
+        return Err(unauthorized_web_response());
+    }
+    let mut conn = state.pool.lock().unwrap();
+    match db::delete_record(&mut conn, id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Ok(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!("DB error: {}", e);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response())
+        }
+    }
 }
 
 async fn api_admin_clients(
