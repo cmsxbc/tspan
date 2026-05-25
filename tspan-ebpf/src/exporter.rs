@@ -76,8 +76,13 @@ impl Exporter {
         Ok(resp.session_id)
     }
 
-    pub async fn end_session(&self, session_id: i64) -> Result<()> {
-        let url = format!("{}/api/sessions/{}/end", self.server_url, session_id);
+    pub async fn end_session(&self, session_id: i64, client_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/sessions/{}/end?client_id={}",
+            self.server_url,
+            session_id,
+            urlencoding::encode(client_id)
+        );
         self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))

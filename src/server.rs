@@ -37,6 +37,11 @@ pub struct CreateExecEventReq {
     pub errno: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct EndSessionQuery {
+    pub client_id: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct CreateExecEventResp {
     pub record_id: i64,
@@ -243,8 +248,10 @@ async fn api_end_session(
     headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(q): Query<EndSessionQuery>,
 ) -> Result<Json<EndSessionResp>, Response> {
-    let (is_admin, client_id) = resolve_auth(&state, &headers).await?;
+    let (is_admin, token_client_id) = resolve_auth(&state, &headers).await?;
+    let client_id = q.client_id.unwrap_or(token_client_id);
     let mut conn = state.pool.lock();
     let duration = if is_admin {
         db::end_session_admin(&mut conn, id)

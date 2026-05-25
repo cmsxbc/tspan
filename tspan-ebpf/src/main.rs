@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(session_id) => {
-                        tracker.insert(data.pid, session_id, start_time, command);
+                        tracker.insert(data.pid, session_id, start_time, client_id.clone());
                         tracing::debug!(
                             pid = data.pid,
                             session_id = session_id,
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
             }
             EbpfEvent::Exit(data) => {
                 if let Some(meta) = tracker.remove(data.pid) {
-                    match exporter.end_session(meta.session_id).await {
+                    match exporter.end_session(meta.session_id, &meta.client_id).await {
                         Ok(_) => {
                             let duration = (data.exit_ns / 1_000_000_000) as i64 - meta.start_time;
                             tracing::debug!(
@@ -195,6 +195,7 @@ async fn main() -> Result<()> {
                             );
                             let item = RetryItem::EndSession {
                                 session_id: meta.session_id,
+                                client_id: meta.client_id.clone(),
                             };
                             if let Err(e2) = retry_buffer.append(&item) {
                                 tracing::error!("Failed to buffer end session: {}", e2);

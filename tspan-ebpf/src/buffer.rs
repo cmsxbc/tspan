@@ -19,6 +19,7 @@ pub enum RetryItem {
     #[serde(rename = "end")]
     EndSession {
         session_id: i64,
+        client_id: String,
     },
     #[serde(rename = "failed")]
     LogFailed {
@@ -93,8 +94,8 @@ impl RetryBuffer {
                         .await
                         .is_ok()
                 }
-                RetryItem::EndSession { session_id } => {
-                    exporter.end_session(*session_id).await.is_ok()
+                RetryItem::EndSession { session_id, client_id } => {
+                    exporter.end_session(*session_id, client_id).await.is_ok()
                 }
                 RetryItem::LogFailed {
                     client_id,

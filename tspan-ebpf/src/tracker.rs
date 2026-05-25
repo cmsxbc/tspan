@@ -6,8 +6,7 @@ use std::sync::Arc;
 pub struct SessionMeta {
     pub session_id: i64,
     pub start_time: i64,
-    #[allow(dead_code)]
-    pub command: String,
+    pub client_id: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,9 +21,9 @@ impl Tracker {
         }
     }
 
-    pub fn insert(&self, pid: u32, session_id: i64, start_time: i64, command: String) {
+    pub fn insert(&self, pid: u32, session_id: i64, start_time: i64, client_id: String) {
         let mut map = self.inner.lock();
-        map.insert(pid, SessionMeta { session_id, start_time, command });
+        map.insert(pid, SessionMeta { session_id, start_time, client_id });
     }
 
     pub fn remove(&self, pid: u32) -> Option<SessionMeta> {
