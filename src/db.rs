@@ -73,6 +73,19 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
         CREATE INDEX IF NOT EXISTS idx_records_start   ON records(start_time);
         CREATE INDEX IF NOT EXISTS idx_records_end     ON records(end_time);
 
+        CREATE TABLE IF NOT EXISTS exec_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   TEXT NOT NULL,
+            timestamp   INTEGER NOT NULL,
+            command     TEXT,
+            process_id  INTEGER,
+            errno       INTEGER,
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_exec_events_client ON exec_events(client_id);
+        CREATE INDEX IF NOT EXISTS idx_exec_events_time   ON exec_events(timestamp);
+
         -- Note: if migrating from old schema without client_id,
         -- manually run: ALTER TABLE api_tokens ADD COLUMN client_id TEXT NOT NULL DEFAULT 'default';
     ")?;
@@ -422,6 +435,32 @@ pub fn delete_record(conn: &mut Connection, id: i64) -> SqlResult<bool> {
         params![id],
     )?;
     Ok(deleted > 0)
+}
+
+pub fn log_exec_event(
+    conn: &mut Connection,
+    client_id: &str,
+    timestamp: i64,
+    command: Option<&str>,
+    process_id: Option<i64>,
+    errno: Option<i64>,
+) -> SqlResult<i64> {
+    if let Some(cmd) = command {
+        if cmd.len() > MAX_COMMAND_LENGTH {
+            return Err(rusqlite::Error::InvalidParameterName(
+                format!("command too long ({} > {})", cmd.len(), MAX_COMMAND_LENGTH)
+            ));
+        }
+    }
+    in_transaction(conn, |conn| {
+        ensure_client(conn, client_id)?;
+        conn.execute(
+            "INSERT INTO exec_events (client_id, timestamp, command, process_id, errno, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?2)",
+            params![client_id, timestamp, command, process_id, errno],
+        )?;
+        Ok(conn.last_insert_rowid())
+    })
 }
 
 pub fn import_record(

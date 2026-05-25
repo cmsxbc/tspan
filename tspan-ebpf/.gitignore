@@ -1,0 +1,5 @@
+# Auto-generated from kernel BTF
+/ebpf/vmlinux.h
+
+# Rust build artifacts
+/target

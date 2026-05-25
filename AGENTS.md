@@ -8,6 +8,7 @@
 
 - **Server**: Rust (axum) + SQLite (WAL mode) + native SVG generation
 - **Client**: Bash wrapper (`tspanrun`) using `curl`
+- **eBPF Agent**: `tspan-ebpf` — per-host daemon capturing `execve` via eBPF and exporting to server
 - **Web UI**: Single-page dashboard with embedded vanilla JavaScript (no frontend framework)
 - **Charts**: Pure SVG generated server-side (no external charting library)
 
@@ -18,6 +19,7 @@
 | Language | Rust (Edition 2021) |
 | Web Framework | axum 0.7 |
 | Async Runtime | tokio (full features) |
+| eBPF | aya 0.13 + clang BPF target |
 | Database | SQLite via `rusqlite` (bundled, WAL mode, backup API) |
 | Auth | Bearer tokens for API; HTTP Basic Auth for Web UI |
 | Password Hashing | bcrypt (optional; plaintext fallback supported) |
@@ -42,6 +44,17 @@
 │   ├── markdown.rs         # Markdown report with base64-encoded SVGs
 │   └── importer.rs         # Historical record importer from text files
 ├── tspanrun                  # Bash client wrapper script
+├── tspan-ebpf/             # eBPF agent (independent crate)
+│   ├── ebpf/
+│   │   ├── main.bpf.c      # eBPF C program (3 tracepoints + ring buffer)
+│   │   └── vmlinux.h       # BTF-generated kernel headers
+│   └── src/
+│       ├── main.rs         # Daemon entry
+│       ├── ebpf.rs         # eBPF load/attach/poll
+│       ├── exporter.rs     # HTTP client → tspan-server
+│       ├── tracker.rs      # PID → session_id tracking
+│       ├── filter.rs       # UID/command filtering
+│       └── buffer.rs       # Offline retry queue
 ├── scripts/
 │   └── tspan-rofi-drun       # rofi modi script for desktop app tracking
 ├── k8s/                    # Kubernetes manifests
@@ -144,6 +157,7 @@ The binary operates in two modes based on CLI arguments:
 | `/api/stats/summary.md` | Basic | Markdown report with SVG calendars |
 | `/api/svg` | Basic | SVG calendar data JSON |
 | `/api/records` | Basic | Paginated record list |
+| `/api/exec-events` | Bearer | Log a failed exec attempt to `exec_events` table |
 | `/api/clients`, `/api/aliases` | Basic | Filter dropdown data |
 | `/api/admin/import` | Basic | Trigger import via API |
 | `/api/admin/backup` | Basic | Download consistent DB snapshot |
@@ -175,8 +189,9 @@ SQLite is accessed through a single shared connection wrapped in `Arc<Mutex<Conn
 
 ### `db.rs`
 - `DbPool` type alias and `create_pool`
-- Schema initialization (`init_db`)
+- Schema initialization (`init_db`): creates `clients`, `api_tokens`, `records`, `exec_events`
 - Session lifecycle: `start_session`, `end_session`, `discard_session`
+- Exec event logging: `log_exec_event` (for eBPF-captured failed execs)
 - Admin variants: `end_session_admin`, `discard_session_admin`, `get_orphaned_sessions_admin`
 - Token management: `verify_api_token`, `list_api_tokens`, `add_api_token`, `delete_api_token`
 - Record queries: `list_records_page`, `distinct_client_ids`

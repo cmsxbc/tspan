@@ -28,6 +28,20 @@ pub struct StartSessionReq {
     pub process_id: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct CreateExecEventReq {
+    pub client_id: Option<String>,
+    pub command: Option<String>,
+    pub process_id: Option<i64>,
+    pub timestamp: Option<i64>,
+    pub errno: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct CreateExecEventResp {
+    pub record_id: i64,
+}
+
 #[derive(Serialize)]
 pub struct StartSessionResp {
     pub session_id: i64,
@@ -118,6 +132,7 @@ pub fn create_router(state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/sessions/start", post(api_start_session))
         .route("/sessions/:id/end", post(api_end_session))
+        .route("/exec-events", post(api_create_exec_event))
         .route("/sessions/:id/discard", post(api_discard_session))
         .route("/sessions/orphaned", get(api_get_orphaned))
         .route("/stats", get(api_get_stats))
@@ -173,6 +188,29 @@ fn unauthorized_web_response() -> Response {
         [(header::WWW_AUTHENTICATE, "Basic realm=\"tspan-admin\"")],
         "Unauthorized",
     ).into_response()
+}
+
+async fn api_create_exec_event(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<CreateExecEventReq>,
+) -> Result<Json<CreateExecEventResp>, StatusCode> {
+    let token_client_id = check_api_auth(&state, &headers).await?;
+    let client_id = req.client_id.unwrap_or(token_client_id);
+    let timestamp = req.timestamp.unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let mut conn = state.pool.lock();
+    let id = db::log_exec_event(
+        &mut conn,
+        &client_id,
+        timestamp,
+        req.command.as_deref(),
+        req.process_id,
+        req.errno,
+    ).map_err(|e| {
+        tracing::error!("DB error logging exec event: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(CreateExecEventResp { record_id: id }))
 }
 
 async fn api_start_session(
