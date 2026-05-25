@@ -34,7 +34,7 @@ fn main() {
 
     let status = Command::new("clang")
         .arg("-O2")
-        .arg("-g")
+        .arg("-g0")
         .arg("-target")
         .arg("bpf")
         .arg(format!("-D__TARGET_ARCH_{}", target_arch))
