@@ -68,7 +68,7 @@ pub async fn import_from_directory(
 
         let end_time = start_time + duration_seconds;
 
-        let mut conn = pool.lock().unwrap();
+        let mut conn = pool.lock();
         if let Err(e) = import_record(&mut conn, client_id, start_time, end_time, duration_seconds, command, alias) {
             failed += 1;
             errors.push(format!("{}: db error {}", filename, e));

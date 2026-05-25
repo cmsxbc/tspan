@@ -17,12 +17,27 @@ if [[ -z "$ALIAS" && "${#*}" -gt 50 ]]; then
     ALIAS="${*:0:50}..."
 fi
 
+# Properly JSON-escape a string value
+json_escape() {
+    local s="${1-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
 AUTH_HEADER="Authorization: Bearer $TOKEN"
 
-# Build JSON payload. client_id is optional - if omitted, server derives it from token.
-PAYLOAD='{"command":"'"$*"'","alias":"'"$ALIAS"'","process_id":'"$PID"'}'
+# Build JSON payload with proper escaping
+CMD_ESCAPED=$(json_escape "$*")
+ALIAS_ESCAPED=$(json_escape "$ALIAS")
 if [[ -n "$CLIENT_ID" ]]; then
-    PAYLOAD='{"client_id":"'"$CLIENT_ID"'","command":"'"$*"'","alias":"'"$ALIAS"'","process_id":'"$PID"'}'
+    CLIENT_ESCAPED=$(json_escape "$CLIENT_ID")
+    PAYLOAD='{"client_id":"'"$CLIENT_ESCAPED"'","command":"'"$CMD_ESCAPED"'","alias":"'"$ALIAS_ESCAPED"'","process_id":'"$PID"'}'
+else
+    PAYLOAD='{"command":"'"$CMD_ESCAPED"'","alias":"'"$ALIAS_ESCAPED"'","process_id":'"$PID"'}'
 fi
 
 # Notify server start
@@ -36,8 +51,13 @@ SESSION_ID=$(echo "$RESPONSE" | grep -o '"session_id":[0-9]*' | cut -d: -f2)
 "$@"
 EXIT_CODE=$?
 
-# Notify server end (ignore errors)
-curl -sf -X POST "$SERVER_URL/api/sessions/$SESSION_ID/end" \
-  -H "$AUTH_HEADER" > /dev/null 2>&1 || true
+# Notify server end with retry
+for i in 1 2 3; do
+    if curl -sf -X POST "$SERVER_URL/api/sessions/$SESSION_ID/end" \
+      -H "$AUTH_HEADER" > /dev/null 2>&1; then
+        break
+    fi
+    sleep 2
+done
 
 exit $EXIT_CODE

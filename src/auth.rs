@@ -20,7 +20,7 @@ pub fn extract_bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 pub fn verify_api_token_sync(state: &AppState, token: &str) -> Result<(bool, String), StatusCode> {
-    let mut conn = state.pool.lock().unwrap();
+    let mut conn = state.pool.lock();
     db::verify_api_token(&mut conn, token).map_err(|e| {
         tracing::error!("DB error: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
