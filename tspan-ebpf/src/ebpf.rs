@@ -19,12 +19,12 @@ pub enum EbpfEvent {
 }
 
 pub fn load_and_attach() -> Result<Ebpf> {
-    let bpf_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/main.bpf.o"));
+    // include_bytes! returns a &[u8] with alignment 1, but object::File::parse
+    // requires the data to be aligned to the ELF header (8 bytes). Copy to a
+    // Vec to guarantee proper alignment.
+    let bpf_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/main.bpf.o")).to_vec();
 
-    #[cfg(debug_assertions)]
-    let mut ebpf = Ebpf::load(bpf_bytes)?;
-    #[cfg(not(debug_assertions))]
-    let mut ebpf = Ebpf::load(bpf_bytes)?;
+    let mut ebpf = Ebpf::load(&bpf_bytes)?;
 
     let program: &mut TracePoint = ebpf
         .program_mut("trace_enter_execve")

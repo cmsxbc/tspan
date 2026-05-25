@@ -34,7 +34,7 @@ fn main() {
 
     let status = Command::new("clang")
         .arg("-O2")
-        .arg("-g0")
+        .arg("-g")
         .arg("-target")
         .arg("bpf")
         .arg(format!("-D__TARGET_ARCH_{}", target_arch))
@@ -49,5 +49,15 @@ fn main() {
 
     if !status.success() {
         panic!("clang failed to compile eBPF program");
+    }
+
+    // Strip DWARF debug sections to keep ELF small, while preserving BTF
+    // (required by aya for CO-RE relocations).
+    let strip_status = Command::new("llvm-strip")
+        .arg("--strip-debug")
+        .arg(&dst)
+        .status();
+    if let Err(e) = strip_status {
+        println!("cargo:warning=llvm-strip failed ({}), continuing with unstripped ELF", e);
     }
 }
