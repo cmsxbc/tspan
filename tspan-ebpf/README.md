@@ -42,6 +42,11 @@ Requires:
 - `clang` with BPF target support
 - Linux kernel with BTF (5.8+ recommended)
 
+> **Kernel upgrade note**: `ebpf/vmlinux.h` is auto-generated from the running kernel's BTF. After a kernel upgrade, remove `ebpf/vmlinux.h` and rebuild so the eBPF program uses the new kernel type definitions:
+> ```bash
+> rm ebpf/vmlinux.h && cargo build --release
+> ```
+
 ## Run
 
 Requires root or `CAP_BPF` + `CAP_PERFMON` + `CAP_SYS_ADMIN`.

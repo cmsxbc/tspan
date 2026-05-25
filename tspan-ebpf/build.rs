@@ -23,6 +23,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", src.display());
     println!("cargo:rerun-if-changed={}", vmlinux_h.display());
+    println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
 
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target_arch = match arch.as_str() {
