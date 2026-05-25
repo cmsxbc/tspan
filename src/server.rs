@@ -201,7 +201,10 @@ async fn api_create_exec_event(
     Json(req): Json<CreateExecEventReq>,
 ) -> Result<Json<CreateExecEventResp>, StatusCode> {
     let token_client_id = check_api_auth(&state, &headers).await?;
-    let client_id = req.client_id.unwrap_or(token_client_id);
+    let client_id = req.client_id.unwrap_or(token_client_id.clone());
+    if !client_id_allowed(&token_client_id, &client_id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let timestamp = req.timestamp.unwrap_or_else(|| chrono::Utc::now().timestamp());
     let mut conn = state.pool.lock();
     let id = db::log_exec_event(
@@ -224,7 +227,10 @@ async fn api_start_session(
     Json(req): Json<StartSessionReq>,
 ) -> Result<Json<StartSessionResp>, StatusCode> {
     let token_client_id = check_api_auth(&state, &headers).await?;
-    let client_id = req.client_id.unwrap_or(token_client_id);
+    let client_id = req.client_id.unwrap_or(token_client_id.clone());
+    if !client_id_allowed(&token_client_id, &client_id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut conn = state.pool.lock();
     let id = db::start_session(
         &mut conn,
@@ -244,6 +250,12 @@ async fn api_start_session(
     }))
 }
 
+/// Verify that a non-admin client_id is within the scope of its token client_id.
+/// Allowed: exact match, or prefixed with "{token_client_id}-".
+fn client_id_allowed(token_client_id: &str, client_id: &str) -> bool {
+    client_id == token_client_id || client_id.starts_with(&format!("{}-", token_client_id))
+}
+
 async fn api_end_session(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -251,7 +263,12 @@ async fn api_end_session(
     Query(q): Query<EndSessionQuery>,
 ) -> Result<Json<EndSessionResp>, Response> {
     let (is_admin, token_client_id) = resolve_auth(&state, &headers).await?;
-    let client_id = q.client_id.unwrap_or(token_client_id);
+    let client_id = q.client_id.unwrap_or(token_client_id.clone());
+
+    if !is_admin && !client_id_allowed(&token_client_id, &client_id) {
+        return Err((StatusCode::FORBIDDEN, "client_id out of scope for this token").into_response());
+    }
+
     let mut conn = state.pool.lock();
     let duration = if is_admin {
         db::end_session_admin(&mut conn, id)
