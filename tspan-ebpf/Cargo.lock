@@ -1620,6 +1620,7 @@ dependencies = [
  "clap",
  "libc",
  "once_cell",
+ "parking_lot",
  "regex",
  "reqwest",
  "serde",

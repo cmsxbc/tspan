@@ -1,5 +1,6 @@
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
@@ -22,29 +23,29 @@ impl Tracker {
     }
 
     pub fn insert(&self, pid: u32, session_id: i64, start_time: i64, command: String) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock();
         map.insert(pid, SessionMeta { session_id, start_time, command });
     }
 
     pub fn remove(&self, pid: u32) -> Option<SessionMeta> {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock();
         map.remove(&pid)
     }
 
     #[allow(dead_code)]
     pub fn get(&self, pid: u32) -> Option<SessionMeta> {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock();
         map.get(&pid).cloned()
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock();
         map.len()
     }
 
     pub fn drain(&self) -> Vec<(u32, SessionMeta)> {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock();
         std::mem::take(&mut *map).into_iter().collect()
     }
 }

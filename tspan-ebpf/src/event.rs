@@ -53,6 +53,12 @@ pub struct ProcessExitData {
     pub exit_code: u32,
 }
 
+// Compile-time size assertions to ensure Rust structs match C layout.
+const _: () = assert!(std::mem::size_of::<ExecSuccessData>() == 240, "ExecSuccessData size mismatch with C");
+const _: () = assert!(std::mem::size_of::<ExecFailedData>() == 248, "ExecFailedData size mismatch with C");
+const _: () = assert!(std::mem::size_of::<ProcessExitData>() == 24, "ProcessExitData size mismatch with C");
+const _: () = assert!(std::mem::size_of::<RawEvent>() == 260, "RawEvent size mismatch with C");
+
 /// Helper to convert a null-terminated byte array to a String.
 pub fn bytes_to_string(buf: &[u8]) -> String {
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
