@@ -14,7 +14,7 @@ mod tracker;
 use buffer::{RetryBuffer, RetryItem};
 use config::{ClientIdMode, Config};
 use ebpf::{load_and_attach, poll_ring_buffer, EbpfEvent};
-use event::{build_command, bytes_to_string};
+use event::build_alias_and_command;
 use exporter::Exporter;
 use filter::Filter;
 use tracker::Tracker;
@@ -105,14 +105,14 @@ async fn main() -> Result<()> {
     while let Some(event) = rx.recv().await {
         match event {
             EbpfEvent::Success(data) => {
-                let command = build_command(&data.filename, data.argc, &data.args);
+                let (alias, command) = build_alias_and_command(&data.filename, data.argc, &data.args);
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }
                 let client_id = build_client_id(&config.client_id_mode, &config.client_id, data.uid);
                 let start_time = (data.start_ns / 1_000_000_000) as i64;
                 match exporter
-                    .start_session(&client_id, &command, data.pid, start_time)
+                    .start_session(&client_id, &command, &alias, data.pid, start_time)
                     .await
                 {
                     Ok(session_id) => {
@@ -121,7 +121,8 @@ async fn main() -> Result<()> {
                             pid = data.pid,
                             session_id = session_id,
                             client_id = %client_id,
-                            command = %bytes_to_string(&data.filename),
+                            alias = %alias,
+                            command = %command,
                             "session started"
                         );
                     }
@@ -130,6 +131,7 @@ async fn main() -> Result<()> {
                         let item = RetryItem::StartSession {
                             client_id,
                             command: command.clone(),
+                            alias: alias.clone(),
                             process_id: data.pid,
                             timestamp: start_time,
                         };
@@ -140,14 +142,14 @@ async fn main() -> Result<()> {
                 }
             }
             EbpfEvent::Failed(data) => {
-                let command = build_command(&data.filename, data.argc, &data.args);
+                let (alias, command) = build_alias_and_command(&data.filename, data.argc, &data.args);
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }
                 let client_id = build_client_id(&config.client_id_mode, &config.client_id, data.uid);
                 let timestamp = (data.start_ns / 1_000_000_000) as i64;
                 match exporter
-                    .log_failed(&client_id, &command, data.pid, timestamp, data.errno)
+                    .log_failed(&client_id, &command, &alias, data.pid, timestamp, data.errno)
                     .await
                 {
                     Ok(record_id) => {
@@ -156,7 +158,8 @@ async fn main() -> Result<()> {
                             record_id = record_id,
                             client_id = %client_id,
                             errno = data.errno,
-                            command = %bytes_to_string(&data.filename),
+                            alias = %alias,
+                            command = %command,
                             "failed exec logged"
                         );
                     }
@@ -165,6 +168,7 @@ async fn main() -> Result<()> {
                         let item = RetryItem::LogFailed {
                             client_id,
                             command: command.clone(),
+                            alias: alias.clone(),
                             process_id: data.pid,
                             timestamp,
                             errno: data.errno,

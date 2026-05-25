@@ -13,6 +13,7 @@ pub enum RetryItem {
     StartSession {
         client_id: String,
         command: String,
+        alias: String,
         process_id: u32,
         timestamp: i64,
     },
@@ -25,6 +26,7 @@ pub enum RetryItem {
     LogFailed {
         client_id: String,
         command: String,
+        alias: String,
         process_id: u32,
         timestamp: i64,
         errno: i64,
@@ -86,11 +88,12 @@ impl RetryBuffer {
                 RetryItem::StartSession {
                     client_id,
                     command,
+                    alias,
                     process_id,
                     timestamp,
                 } => {
                     exporter
-                        .start_session(client_id, command, *process_id, *timestamp)
+                        .start_session(client_id, command, alias, *process_id, *timestamp)
                         .await
                         .is_ok()
                 }
@@ -100,12 +103,13 @@ impl RetryBuffer {
                 RetryItem::LogFailed {
                     client_id,
                     command,
+                    alias,
                     process_id,
                     timestamp,
                     errno,
                 } => {
                     exporter
-                        .log_failed(client_id, command, *process_id, *timestamp, *errno)
+                        .log_failed(client_id, command, alias, *process_id, *timestamp, *errno)
                         .await
                         .is_ok()
                 }

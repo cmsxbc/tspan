@@ -65,15 +65,24 @@ pub fn bytes_to_string(buf: &[u8]) -> String {
     String::from_utf8_lossy(&buf[..len]).into_owned()
 }
 
-/// Build command string from filename + args.
-pub fn build_command(filename: &[u8], argc: u8, args: &[[u8; ARG_SIZE]; MAX_ARGS]) -> String {
-    let mut cmd = bytes_to_string(filename);
+/// Build (alias, command) from filename and args.
+/// alias = the executable path (from execve filename)
+/// command = argv joined as a single string (including argv[0])
+pub fn build_alias_and_command(
+    filename: &[u8],
+    argc: u8,
+    args: &[[u8; ARG_SIZE]; MAX_ARGS],
+) -> (String, String) {
+    let alias = bytes_to_string(filename);
+    let mut cmd = String::new();
     for i in 0..(argc as usize).min(MAX_ARGS) {
         let arg = bytes_to_string(&args[i]);
         if !arg.is_empty() {
-            cmd.push(' ');
+            if !cmd.is_empty() {
+                cmd.push(' ');
+            }
             cmd.push_str(&arg);
         }
     }
-    cmd
+    (alias, cmd)
 }

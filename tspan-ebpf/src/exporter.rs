@@ -12,6 +12,7 @@ pub struct Exporter {
 struct StartSessionReq {
     client_id: String,
     command: String,
+    alias: String,
     process_id: i64,
 }
 
@@ -31,6 +32,7 @@ struct EndSessionResp {
 struct CreateExecEventReq {
     client_id: String,
     command: String,
+    alias: String,
     process_id: i64,
     timestamp: i64,
     errno: i64,
@@ -54,6 +56,7 @@ impl Exporter {
         &self,
         client_id: &str,
         command: &str,
+        alias: &str,
         process_id: u32,
         _timestamp: i64,
     ) -> Result<i64> {
@@ -61,6 +64,7 @@ impl Exporter {
         let req = StartSessionReq {
             client_id: client_id.to_string(),
             command: command.to_string(),
+            alias: alias.to_string(),
             process_id: process_id as i64,
         };
         let resp: StartSessionResp = self
@@ -96,6 +100,7 @@ impl Exporter {
         &self,
         client_id: &str,
         command: &str,
+        alias: &str,
         process_id: u32,
         timestamp: i64,
         errno: i64,
@@ -104,6 +109,7 @@ impl Exporter {
         let req = CreateExecEventReq {
             client_id: client_id.to_string(),
             command: command.to_string(),
+            alias: alias.to_string(),
             process_id: process_id as i64,
             timestamp,
             errno,

@@ -32,6 +32,7 @@ pub struct StartSessionReq {
 pub struct CreateExecEventReq {
     pub client_id: Option<String>,
     pub command: Option<String>,
+    pub alias: Option<String>,
     pub process_id: Option<i64>,
     pub timestamp: Option<i64>,
     pub errno: Option<i64>,
@@ -212,6 +213,7 @@ async fn api_create_exec_event(
         &client_id,
         timestamp,
         req.command.as_deref(),
+        req.alias.as_deref(),
         req.process_id,
         req.errno,
     ).map_err(|e| {

@@ -91,6 +91,8 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
     ")?;
     // Attempt to add command_tokens column for existing databases; ignore if already exists
     let _ = conn.execute("ALTER TABLE records ADD COLUMN command_tokens TEXT", []);
+    // Attempt to add alias column to exec_events for existing databases; ignore if already exists
+    let _ = conn.execute("ALTER TABLE exec_events ADD COLUMN alias TEXT", []);
     Ok(())
 }
 
@@ -442,6 +444,7 @@ pub fn log_exec_event(
     client_id: &str,
     timestamp: i64,
     command: Option<&str>,
+    alias: Option<&str>,
     process_id: Option<i64>,
     errno: Option<i64>,
 ) -> SqlResult<i64> {
@@ -455,9 +458,9 @@ pub fn log_exec_event(
     in_transaction(conn, |conn| {
         ensure_client(conn, client_id)?;
         conn.execute(
-            "INSERT INTO exec_events (client_id, timestamp, command, process_id, errno, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?2)",
-            params![client_id, timestamp, command, process_id, errno],
+            "INSERT INTO exec_events (client_id, timestamp, command, alias, process_id, errno, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?2)",
+            params![client_id, timestamp, command, alias, process_id, errno],
         )?;
         Ok(conn.last_insert_rowid())
     })
