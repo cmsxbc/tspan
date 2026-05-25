@@ -12,12 +12,38 @@ mod filter;
 mod tracker;
 
 use buffer::{RetryBuffer, RetryItem};
-use config::Config;
+use config::{ClientIdMode, Config};
 use ebpf::{load_and_attach, poll_ring_buffer, EbpfEvent};
 use event::{build_command, bytes_to_string};
 use exporter::Exporter;
 use filter::Filter;
 use tracker::Tracker;
+
+fn uid_to_username(uid: u32) -> String {
+    unsafe {
+        let pw = libc::getpwuid(uid);
+        if !pw.is_null() {
+            let name = std::ffi::CStr::from_ptr((*pw).pw_name);
+            return name.to_string_lossy().into_owned();
+        }
+    }
+    uid.to_string()
+}
+
+fn build_client_id(mode: &ClientIdMode, base: &str, uid: u32) -> String {
+    match mode {
+        ClientIdMode::Hostname => base.to_string(),
+        ClientIdMode::HostnameUid => format!("{}-{}", base, uid),
+        ClientIdMode::HostnameUser => {
+            let user = uid_to_username(uid);
+            format!("{}-{}", base, user)
+        }
+        ClientIdMode::HostnameUidUser => {
+            let user = uid_to_username(uid);
+            format!("{}-{}-{}", base, uid, user)
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,17 +58,14 @@ async fn main() -> Result<()> {
     let config = Config::parse();
     tracing::info!("Starting tspan-ebpf daemon");
     tracing::info!("Server: {}", config.server);
-    tracing::info!("Client ID: {}", config.client_id);
+    tracing::info!("Base client ID: {}", config.client_id);
+    tracing::info!("Client ID mode: {:?}", config.client_id_mode);
 
     let ebpf = load_and_attach()?;
     tracing::info!("eBPF programs loaded and attached");
 
     let retry_buffer = RetryBuffer::new(&config.retry_file)?;
-    let exporter = Exporter::new(
-        config.server.clone(),
-        config.token.clone(),
-        config.client_id.clone(),
-    );
+    let exporter = Exporter::new(config.server.clone(), config.token.clone());
 
     // Replay buffered events on startup
     match retry_buffer.replay(&exporter).await {
@@ -86,9 +109,10 @@ async fn main() -> Result<()> {
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }
+                let client_id = build_client_id(&config.client_id_mode, &config.client_id, data.uid);
                 let start_time = (data.start_ns / 1_000_000_000) as i64;
                 match exporter
-                    .start_session(&command, data.pid, start_time)
+                    .start_session(&client_id, &command, data.pid, start_time)
                     .await
                 {
                     Ok(session_id) => {
@@ -96,6 +120,7 @@ async fn main() -> Result<()> {
                         tracing::debug!(
                             pid = data.pid,
                             session_id = session_id,
+                            client_id = %client_id,
                             command = %bytes_to_string(&data.filename),
                             "session started"
                         );
@@ -103,6 +128,7 @@ async fn main() -> Result<()> {
                     Err(e) => {
                         tracing::error!("Failed to start session: {}", e);
                         let item = RetryItem::StartSession {
+                            client_id,
                             command: command.clone(),
                             process_id: data.pid,
                             timestamp: start_time,
@@ -118,15 +144,17 @@ async fn main() -> Result<()> {
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }
+                let client_id = build_client_id(&config.client_id_mode, &config.client_id, data.uid);
                 let timestamp = (data.start_ns / 1_000_000_000) as i64;
                 match exporter
-                    .log_failed(&command, data.pid, timestamp, data.errno)
+                    .log_failed(&client_id, &command, data.pid, timestamp, data.errno)
                     .await
                 {
                     Ok(record_id) => {
                         tracing::debug!(
                             pid = data.pid,
                             record_id = record_id,
+                            client_id = %client_id,
                             errno = data.errno,
                             command = %bytes_to_string(&data.filename),
                             "failed exec logged"
@@ -135,6 +163,7 @@ async fn main() -> Result<()> {
                     Err(e) => {
                         tracing::error!("Failed to log failed exec: {}", e);
                         let item = RetryItem::LogFailed {
+                            client_id,
                             command: command.clone(),
                             process_id: data.pid,
                             timestamp,

@@ -10,11 +10,24 @@ use crate::exporter::Exporter;
 #[serde(tag = "action")]
 pub enum RetryItem {
     #[serde(rename = "start")]
-    StartSession { command: String, process_id: u32, timestamp: i64 },
+    StartSession {
+        client_id: String,
+        command: String,
+        process_id: u32,
+        timestamp: i64,
+    },
     #[serde(rename = "end")]
-    EndSession { session_id: i64 },
+    EndSession {
+        session_id: i64,
+    },
     #[serde(rename = "failed")]
-    LogFailed { command: String, process_id: u32, timestamp: i64, errno: i64 },
+    LogFailed {
+        client_id: String,
+        command: String,
+        process_id: u32,
+        timestamp: i64,
+        errno: i64,
+    },
 }
 
 pub struct RetryBuffer {
@@ -26,11 +39,16 @@ impl RetryBuffer {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
         }
-        Ok(Self { path: path.to_string() })
+        Ok(Self {
+            path: path.to_string(),
+        })
     }
 
     pub fn append(&self, item: &RetryItem) -> Result<()> {
-        let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         let line = serde_json::to_string(item)?;
         writeln!(file, "{}", line)?;
         Ok(())
@@ -64,14 +82,31 @@ impl RetryBuffer {
             };
 
             let success = match &item {
-                RetryItem::StartSession { command, process_id, timestamp } => {
-                    exporter.start_session(command, *process_id, *timestamp).await.is_ok()
+                RetryItem::StartSession {
+                    client_id,
+                    command,
+                    process_id,
+                    timestamp,
+                } => {
+                    exporter
+                        .start_session(client_id, command, *process_id, *timestamp)
+                        .await
+                        .is_ok()
                 }
                 RetryItem::EndSession { session_id } => {
                     exporter.end_session(*session_id).await.is_ok()
                 }
-                RetryItem::LogFailed { command, process_id, timestamp, errno } => {
-                    exporter.log_failed(command, *process_id, *timestamp, *errno).await.is_ok()
+                RetryItem::LogFailed {
+                    client_id,
+                    command,
+                    process_id,
+                    timestamp,
+                    errno,
+                } => {
+                    exporter
+                        .log_failed(client_id, command, *process_id, *timestamp, *errno)
+                        .await
+                        .is_ok()
                 }
             };
 
@@ -85,7 +120,11 @@ impl RetryBuffer {
         if remaining.is_empty() {
             let _ = fs::remove_file(&self.path);
         } else {
-            let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&self.path)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&self.path)?;
             for line in remaining {
                 writeln!(file, "{}", line)?;
             }

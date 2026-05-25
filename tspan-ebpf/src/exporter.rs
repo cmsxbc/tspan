@@ -6,7 +6,6 @@ pub struct Exporter {
     client: reqwest::Client,
     server_url: String,
     token: String,
-    client_id: String,
 }
 
 #[derive(Serialize)]
@@ -43,23 +42,29 @@ struct CreateExecEventResp {
 }
 
 impl Exporter {
-    pub fn new(server_url: String, token: String, client_id: String) -> Self {
+    pub fn new(server_url: String, token: String) -> Self {
         Self {
             client: reqwest::Client::new(),
             server_url,
             token,
-            client_id,
         }
     }
 
-    pub async fn start_session(&self, command: &str, process_id: u32, _timestamp: i64) -> Result<i64> {
+    pub async fn start_session(
+        &self,
+        client_id: &str,
+        command: &str,
+        process_id: u32,
+        _timestamp: i64,
+    ) -> Result<i64> {
         let url = format!("{}/api/sessions/start", self.server_url);
         let req = StartSessionReq {
-            client_id: self.client_id.clone(),
+            client_id: client_id.to_string(),
             command: command.to_string(),
             process_id: process_id as i64,
         };
-        let resp: StartSessionResp = self.client
+        let resp: StartSessionResp = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .json(&req)
@@ -82,16 +87,24 @@ impl Exporter {
         Ok(())
     }
 
-    pub async fn log_failed(&self, command: &str, process_id: u32, timestamp: i64, errno: i64) -> Result<i64> {
+    pub async fn log_failed(
+        &self,
+        client_id: &str,
+        command: &str,
+        process_id: u32,
+        timestamp: i64,
+        errno: i64,
+    ) -> Result<i64> {
         let url = format!("{}/api/exec-events", self.server_url);
         let req = CreateExecEventReq {
-            client_id: self.client_id.clone(),
+            client_id: client_id.to_string(),
             command: command.to_string(),
             process_id: process_id as i64,
             timestamp,
             errno,
         };
-        let resp: CreateExecEventResp = self.client
+        let resp: CreateExecEventResp = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .json(&req)

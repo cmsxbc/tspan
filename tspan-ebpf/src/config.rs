@@ -1,4 +1,19 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ClientIdMode {
+    /// Use hostname only (e.g. `myhost`)
+    Hostname,
+    /// Append UID (e.g. `myhost-1000`)
+    #[value(name = "hostname-uid")]
+    HostnameUid,
+    /// Append username (e.g. `myhost-alice`)
+    #[value(name = "hostname-user")]
+    HostnameUser,
+    /// Append both UID and username (e.g. `myhost-1000-alice`)
+    #[value(name = "hostname-uid-user")]
+    HostnameUidUser,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "tspan-ebpf", version)]
@@ -12,6 +27,9 @@ pub struct Config {
 
     #[arg(long, env = "TSPAN_EBPF_CLIENT", default_value_t = get_hostname())]
     pub client_id: String,
+
+    #[arg(long, env = "TSPAN_EBPF_CLIENT_MODE", default_value = "hostname")]
+    pub client_id_mode: ClientIdMode,
 
     #[arg(long, env = "TSPAN_EBPF_RETRY_FILE", default_value = "/var/lib/tspan-ebpf/retry.jsonl")]
     pub retry_file: String,

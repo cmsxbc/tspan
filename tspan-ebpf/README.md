@@ -55,7 +55,8 @@ Requires root or `CAP_BPF` + `CAP_PERFMON` + `CAP_SYS_ADMIN`.
 sudo ./target/release/tspan-ebpf \
   --server http://tspan-server:8080 \
   --token tspan_xxxxx \
-  --client-id $(hostname)
+  --client-id $(hostname) \
+  --client-id-mode hostname-uid-user
 ```
 
 ### Environment Variables
@@ -64,7 +65,8 @@ sudo ./target/release/tspan-ebpf \
 |----------|-------------|
 | `TSPAN_EBPF_SERVER` | tspan-server URL |
 | `TSPAN_EBPF_TOKEN` | API Bearer token |
-| `TSPAN_EBPF_CLIENT` | client_id for records |
+| `TSPAN_EBPF_CLIENT` | Base client_id (default: hostname) |
+| `TSPAN_EBPF_CLIENT_MODE` | `hostname` / `hostname-uid` / `hostname-user` / `hostname-uid-user` |
 | `TSPAN_EBPF_ALLOW_UIDS` | Comma-separated UID allowlist |
 | `TSPAN_EBPF_DENY_COMM` | Regex pattern to deny commands |
 
