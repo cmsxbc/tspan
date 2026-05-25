@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 
 pub type DbPool = Arc<Mutex<Connection>>;
 
-const MAX_COMMAND_LENGTH: usize = 4096;
+const MAX_COMMAND_LENGTH: usize = 65536;
 
 #[derive(Debug, Clone)]
 pub struct Client {

@@ -1,46 +1,33 @@
 /// Event structures shared with the eBPF program.
-/// Must match `ebpf/main.bpf.c` exactly.
 
-pub const MAX_ARGS: usize = 2;
-pub const ARG_SIZE: usize = 32;
+pub const ARG_BUF_SIZE: usize = 65536;
 pub const FILENAME_SIZE: usize = 128;
-pub const EVENT_DATA_SIZE: usize = 256;
+pub const COMM_SIZE: usize = 16;
 
 pub const EVENT_EXEC_SUCCESS: u32 = 1;
 pub const EVENT_EXEC_FAILED: u32 = 2;
 pub const EVENT_PROCESS_EXIT: u32 = 3;
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct RawEvent {
-    pub ty: u32,
-    pub data: [u8; EVENT_DATA_SIZE],
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct ExecSuccessData {
+#[derive(Debug, Clone)]
+pub struct ExecSuccessInfo {
     pub pid: u32,
     pub tgid: u32,
     pub uid: u32,
     pub start_ns: u64,
-    pub comm: [u8; 16],
-    pub filename: [u8; FILENAME_SIZE],
-    pub argc: u8,
-    pub args: [[u8; ARG_SIZE]; MAX_ARGS],
+    pub comm: String,
+    pub filename: String,
+    pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct ExecFailedData {
+#[derive(Debug, Clone)]
+pub struct ExecFailedInfo {
     pub pid: u32,
     pub tgid: u32,
     pub uid: u32,
     pub start_ns: u64,
-    pub comm: [u8; 16],
-    pub filename: [u8; FILENAME_SIZE],
-    pub argc: u8,
-    pub args: [[u8; ARG_SIZE]; MAX_ARGS],
+    pub comm: String,
+    pub filename: String,
+    pub args: Vec<String>,
     pub errno: i64,
 }
 
@@ -53,36 +40,9 @@ pub struct ProcessExitData {
     pub exit_code: u32,
 }
 
-// Compile-time size assertions to ensure Rust structs match C layout.
-const _: () = assert!(std::mem::size_of::<ExecSuccessData>() == 240, "ExecSuccessData size mismatch with C");
-const _: () = assert!(std::mem::size_of::<ExecFailedData>() == 248, "ExecFailedData size mismatch with C");
-const _: () = assert!(std::mem::size_of::<ProcessExitData>() == 24, "ProcessExitData size mismatch with C");
-const _: () = assert!(std::mem::size_of::<RawEvent>() == 260, "RawEvent size mismatch with C");
-
-/// Helper to convert a null-terminated byte array to a String.
-pub fn bytes_to_string(buf: &[u8]) -> String {
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..len]).into_owned()
-}
-
-/// Build (alias, command) from filename and args.
-/// alias = the executable path (from execve filename)
-/// command = argv joined as a single string (including argv[0])
-pub fn build_alias_and_command(
-    filename: &[u8],
-    argc: u8,
-    args: &[[u8; ARG_SIZE]; MAX_ARGS],
-) -> (String, String) {
-    let alias = bytes_to_string(filename);
-    let mut cmd = String::new();
-    for i in 0..(argc as usize).min(MAX_ARGS) {
-        let arg = bytes_to_string(&args[i]);
-        if !arg.is_empty() {
-            if !cmd.is_empty() {
-                cmd.push(' ');
-            }
-            cmd.push_str(&arg);
-        }
-    }
-    (alias, cmd)
+/// Build alias and command from parsed exec info.
+pub fn build_alias_and_command(filename: &str, args: &[String]) -> (String, String) {
+    let alias = filename.to_string();
+    let command = args.join(" ");
+    (alias, command)
 }

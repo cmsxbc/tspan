@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
     while let Some(event) = rx.recv().await {
         match event {
             EbpfEvent::Success(data) => {
-                let (alias, command) = build_alias_and_command(&data.filename, data.argc, &data.args);
+                let (alias, command) = build_alias_and_command(&data.filename, &data.args);
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
                 }
             }
             EbpfEvent::Failed(data) => {
-                let (alias, command) = build_alias_and_command(&data.filename, data.argc, &data.args);
+                let (alias, command) = build_alias_and_command(&data.filename, &data.args);
                 if !filter.allow(data.uid, &command) {
                     continue;
                 }

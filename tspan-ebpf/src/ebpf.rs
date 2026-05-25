@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use aya::maps::RingBuf;
+use aya::maps::{HashMap, RingBuf};
 use aya::programs::TracePoint;
 use aya::Ebpf;
 use std::time::Duration;
@@ -7,21 +7,18 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::event::{
-    ExecFailedData, ExecSuccessData, ProcessExitData, RawEvent, EVENT_EXEC_FAILED,
-    EVENT_EXEC_SUCCESS, EVENT_PROCESS_EXIT,
+    ExecFailedInfo, ExecSuccessInfo, ProcessExitData, ARG_BUF_SIZE, COMM_SIZE,
+    EVENT_EXEC_FAILED, EVENT_EXEC_SUCCESS, EVENT_PROCESS_EXIT, FILENAME_SIZE,
 };
 
 #[derive(Debug, Clone)]
 pub enum EbpfEvent {
-    Success(ExecSuccessData),
-    Failed(ExecFailedData),
+    Success(ExecSuccessInfo),
+    Failed(ExecFailedInfo),
     Exit(ProcessExitData),
 }
 
 pub fn load_and_attach() -> Result<Ebpf> {
-    // include_bytes! returns a &[u8] with alignment 1, but object::File::parse
-    // requires the data to be aligned to the ELF header (8 bytes). Copy to a
-    // Vec to guarantee proper alignment.
     let bpf_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/main.bpf.o")).to_vec();
 
     let mut ebpf = Ebpf::load(&bpf_bytes)?;
@@ -64,13 +61,38 @@ pub fn load_and_attach() -> Result<Ebpf> {
     Ok(ebpf)
 }
 
+fn bytes_to_string(buf: &[u8]) -> String {
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..len]).into_owned()
+}
+
+fn parse_args(args_data: &[u8], argc: u32) -> Vec<String> {
+    let mut args = Vec::new();
+    for s in args_data.split(|&b| b == 0) {
+        if s.is_empty() {
+            continue;
+        }
+        args.push(bytes_to_string(s));
+        if args.len() >= argc as usize {
+            break;
+        }
+    }
+    args
+}
+
 pub async fn poll_ring_buffer(
     mut ebpf: Ebpf,
     tx: mpsc::Sender<EbpfEvent>,
     shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let map = ebpf.map_mut("rb").context("ring buffer map 'rb' not found")?;
-    let mut ring_buf = RingBuf::try_from(map)?;
+    let rb_map: *mut _ = ebpf.map_mut("rb").context("ring buffer map 'rb' not found")?;
+    let arg_map: *mut _ = ebpf
+        .map_mut("arg_buf_map")
+        .context("arg_buf_map not found")?;
+
+    // SAFETY: rb_map and arg_map point to two distinct maps inside ebpf.
+    let mut ring_buf = unsafe { RingBuf::try_from(&mut *rb_map)? };
+    let mut arg_buf_map = unsafe { HashMap::<_, u32, [u8; ARG_BUF_SIZE]>::try_from(&mut *arg_map)? };
 
     loop {
         if *shutdown.borrow() {
@@ -78,28 +100,88 @@ pub async fn poll_ring_buffer(
         }
 
         if let Some(item) = ring_buf.next() {
-            let raw: &RawEvent = unsafe { std::mem::transmute(item.as_ptr()) };
-            match raw.ty {
-                EVENT_EXEC_SUCCESS => {
-                    let data: &ExecSuccessData = unsafe { std::mem::transmute(raw.data.as_ptr()) };
-                    if tx.send(EbpfEvent::Success(*data)).await.is_err() {
-                        break;
+            if item.len() < 4 {
+                continue;
+            }
+            let ty = u32::from_ne_bytes(item[0..4].try_into().unwrap());
+            match ty {
+                EVENT_EXEC_SUCCESS | EVENT_EXEC_FAILED => {
+                    if item.len() < 184 {
+                        continue;
                     }
-                }
-                EVENT_EXEC_FAILED => {
-                    let data: &ExecFailedData = unsafe { std::mem::transmute(raw.data.as_ptr()) };
-                    if tx.send(EbpfEvent::Failed(*data)).await.is_err() {
+                    let pid = u32::from_ne_bytes(item[4..8].try_into().unwrap());
+                    let tgid = u32::from_ne_bytes(item[8..12].try_into().unwrap());
+                    let uid = u32::from_ne_bytes(item[12..16].try_into().unwrap());
+                    let start_ns = u64::from_ne_bytes(item[16..24].try_into().unwrap());
+                    let filename = bytes_to_string(&item[24..24 + FILENAME_SIZE]);
+                    let comm = bytes_to_string(&item[152..152 + COMM_SIZE]);
+                    let argc = u32::from_ne_bytes(item[168..172].try_into().unwrap());
+                    let args_len = u32::from_ne_bytes(item[172..176].try_into().unwrap()) as usize;
+                    let errno = i64::from_ne_bytes(item[176..184].try_into().unwrap());
+
+                    let mut args = Vec::new();
+                    match arg_buf_map.get(&pid, 0) {
+                        Ok(buf) => {
+                            let actual_len = args_len.min(ARG_BUF_SIZE);
+                            args = parse_args(&buf[..actual_len], argc);
+                            let _ = arg_buf_map.remove(&pid);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "arg_buf_map get failed for pid {} (args_len={} argc={}): {:?}",
+                                pid, args_len, argc, e
+                            );
+                        }
+                    }
+
+                    let event = if ty == EVENT_EXEC_SUCCESS {
+                        EbpfEvent::Success(ExecSuccessInfo {
+                            pid,
+                            tgid,
+                            uid,
+                            start_ns,
+                            comm,
+                            filename,
+                            args,
+                        })
+                    } else {
+                        EbpfEvent::Failed(ExecFailedInfo {
+                            pid,
+                            tgid,
+                            uid,
+                            start_ns,
+                            comm,
+                            filename,
+                            args,
+                            errno,
+                        })
+                    };
+
+                    if tx.send(event).await.is_err() {
                         break;
                     }
                 }
                 EVENT_PROCESS_EXIT => {
-                    let data: &ProcessExitData = unsafe { std::mem::transmute(raw.data.as_ptr()) };
-                    if tx.send(EbpfEvent::Exit(*data)).await.is_err() {
+                    if item.len() < 32 {
+                        continue;
+                    }
+                    let pid = u32::from_ne_bytes(item[4..8].try_into().unwrap());
+                    let tgid = u32::from_ne_bytes(item[8..12].try_into().unwrap());
+                    // C struct exit_event has 4-byte padding before u64 exit_ns
+                    let exit_ns = u64::from_ne_bytes(item[16..24].try_into().unwrap());
+                    let exit_code = u32::from_ne_bytes(item[24..28].try_into().unwrap());
+                    let event = EbpfEvent::Exit(ProcessExitData {
+                        pid,
+                        tgid,
+                        exit_ns,
+                        exit_code,
+                    });
+                    if tx.send(event).await.is_err() {
                         break;
                     }
                 }
                 _ => {
-                    tracing::warn!("unknown event type: {}", raw.ty);
+                    tracing::warn!("unknown event type: {}", ty);
                 }
             }
         } else {
