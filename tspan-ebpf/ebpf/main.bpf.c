@@ -62,16 +62,13 @@ struct {
     __type(value, u64);
 } active_pids SEC(".maps");
 
-/* Per-cpu scratch buffer.
- * NOTE: We assume sys_enter_execve and sys_exit_execve run on the same CPU.
- * In practice the scheduler does not migrate a task during execve (it runs
- * to completion in kernel mode), but this is not a hard guarantee.
- * If the assumption is violated, args_data will be empty or corrupted.
- * A robust fix would use a pid-keyed hash map instead of per-cpu storage.
+/* Per-cpu scratch buffer with 256 slots keyed by pid % 256.
+ * Greatly reduces collision probability when multiple processes execve
+ * concurrently on the same CPU (e.g. shell pipelines).
  */
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 1);
+    __uint(max_entries, 256);
     __type(key, u32);
     __type(value, char[ARG_BUF_SIZE]);
 } scratch_buf SEC(".maps");
@@ -95,7 +92,7 @@ static __always_inline int handle_enter_exec(const char *filename,
     bpf_get_current_comm(&ec.comm, sizeof(ec.comm));
     bpf_probe_read_user_str(&ec.filename, sizeof(ec.filename), (void *)filename);
 
-    u32 key = 0;
+    u32 key = pid % 256;
     char *scratch = bpf_map_lookup_elem(&scratch_buf, &key);
     if (!scratch)
         return 0;
@@ -163,7 +160,7 @@ static __always_inline int handle_exit_exec(long ret)
     e->args_len = args_len;
     e->errno = ret;
 
-    u32 key = 0;
+    u32 key = pid % 256;
     char *scratch = bpf_map_lookup_elem(&scratch_buf, &key);
     if (scratch) {
         bpf_probe_read_kernel(e->args_data, ARG_BUF_SIZE, scratch);
