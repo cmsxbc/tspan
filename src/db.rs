@@ -78,6 +78,7 @@ pub fn init_db(conn: &mut Connection) -> SqlResult<()> {
             client_id   TEXT NOT NULL,
             timestamp   INTEGER NOT NULL,
             command     TEXT,
+            alias       TEXT,
             process_id  INTEGER,
             errno       INTEGER,
             created_at  INTEGER NOT NULL

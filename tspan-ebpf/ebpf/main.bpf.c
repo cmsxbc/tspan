@@ -62,7 +62,13 @@ struct {
     __type(value, u64);
 } active_pids SEC(".maps");
 
-/* Per-cpu scratch buffer */
+/* Per-cpu scratch buffer.
+ * NOTE: We assume sys_enter_execve and sys_exit_execve run on the same CPU.
+ * In practice the scheduler does not migrate a task during execve (it runs
+ * to completion in kernel mode), but this is not a hard guarantee.
+ * If the assumption is violated, args_data will be empty or corrupted.
+ * A robust fix would use a pid-keyed hash map instead of per-cpu storage.
+ */
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);

@@ -1,12 +1,16 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
+
+const TRACKER_STALE_SECS: u64 = 86400; // 24 hours
 
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
     pub session_id: i64,
     pub start_time: i64,
     pub client_id: String,
+    pub inserted_at: Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -23,7 +27,25 @@ impl Tracker {
 
     pub fn insert(&self, pid: u32, session_id: i64, start_time: i64, client_id: String) {
         let mut map = self.inner.lock();
-        map.insert(pid, SessionMeta { session_id, start_time, client_id });
+        let now = Instant::now();
+        // Evict stale entries to prevent unbounded growth from long-lived daemons
+        let stale: Vec<u32> = map
+            .iter()
+            .filter(|(_, meta)| now.duration_since(meta.inserted_at).as_secs() > TRACKER_STALE_SECS)
+            .map(|(&pid, _)| pid)
+            .collect();
+        for pid in stale {
+            map.remove(&pid);
+        }
+        map.insert(
+            pid,
+            SessionMeta {
+                session_id,
+                start_time,
+                client_id,
+                inserted_at: now,
+            },
+        );
     }
 
     pub fn remove(&self, pid: u32) -> Option<SessionMeta> {
