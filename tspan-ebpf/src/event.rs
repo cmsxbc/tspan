@@ -1,6 +1,6 @@
 /// Event structures shared with the eBPF program.
 
-pub const ARG_BUF_SIZE: usize = 65536;
+pub const ARG_BUF_SIZE: usize = 2048;
 pub const FILENAME_SIZE: usize = 128;
 pub const COMM_SIZE: usize = 16;
 

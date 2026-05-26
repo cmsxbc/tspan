@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use aya::maps::{HashMap, RingBuf};
+use aya::maps::RingBuf;
 use aya::programs::TracePoint;
 use aya::Ebpf;
 use std::time::Duration;
@@ -85,14 +85,8 @@ pub async fn poll_ring_buffer(
     tx: mpsc::Sender<EbpfEvent>,
     shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let rb_map: *mut _ = ebpf.map_mut("rb").context("ring buffer map 'rb' not found")?;
-    let arg_map: *mut _ = ebpf
-        .map_mut("arg_buf_map")
-        .context("arg_buf_map not found")?;
-
-    // SAFETY: rb_map and arg_map point to two distinct maps inside ebpf.
-    let mut ring_buf = unsafe { RingBuf::try_from(&mut *rb_map)? };
-    let mut arg_buf_map = unsafe { HashMap::<_, u32, [u8; ARG_BUF_SIZE]>::try_from(&mut *arg_map)? };
+    let map = ebpf.map_mut("rb").context("ring buffer map 'rb' not found")?;
+    let mut ring_buf = RingBuf::try_from(map)?;
 
     loop {
         if *shutdown.borrow() {
@@ -119,20 +113,8 @@ pub async fn poll_ring_buffer(
                     let args_len = u32::from_ne_bytes(item[172..176].try_into().unwrap()) as usize;
                     let errno = i64::from_ne_bytes(item[176..184].try_into().unwrap());
 
-                    let mut args = Vec::new();
-                    match arg_buf_map.get(&pid, 0) {
-                        Ok(buf) => {
-                            let actual_len = args_len.min(ARG_BUF_SIZE);
-                            args = parse_args(&buf[..actual_len], argc);
-                            let _ = arg_buf_map.remove(&pid);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "arg_buf_map get failed for pid {} (args_len={} argc={}): {:?}",
-                                pid, args_len, argc, e
-                            );
-                        }
-                    }
+                    let actual_len = args_len.min(ARG_BUF_SIZE);
+                    let args = parse_args(&item[184..184 + actual_len], argc);
 
                     let event = if ty == EVENT_EXEC_SUCCESS {
                         EbpfEvent::Success(ExecSuccessInfo {
@@ -167,7 +149,7 @@ pub async fn poll_ring_buffer(
                     }
                     let pid = u32::from_ne_bytes(item[4..8].try_into().unwrap());
                     let tgid = u32::from_ne_bytes(item[8..12].try_into().unwrap());
-                    // C struct exit_event has 4-byte padding before u64 exit_ns
+                    // u64 exit_ns at offset 16 (after 4-byte padding for alignment)
                     let exit_ns = u64::from_ne_bytes(item[16..24].try_into().unwrap());
                     let exit_code = u32::from_ne_bytes(item[24..28].try_into().unwrap());
                     let event = EbpfEvent::Exit(ProcessExitData {
