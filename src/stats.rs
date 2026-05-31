@@ -1,6 +1,8 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Timelike, Utc};
+use chrono_tz::Tz;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct TotalStats {
@@ -45,6 +47,12 @@ pub struct Stats {
     pub interval: IntervalStats,
 }
 
+pub fn resolve_tz(tz_name: Option<&str>) -> Tz {
+    tz_name
+        .and_then(|name| name.parse().ok())
+        .unwrap_or(Tz::UTC)
+}
+
 pub fn human_readable_time(seconds: i64) -> String {
     if seconds <= 0 {
         return "0 s".to_string();
@@ -77,9 +85,7 @@ pub fn calc_ratio(value: i64, total: i64) -> f64 {
     (value as f64 * 100.0) / total as f64
 }
 
-pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, command: &str) -> anyhow::Result<Stats> {
-    let today = Utc::now().timestamp();
-
+pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, command: &str, tz: &Tz) -> anyhow::Result<Stats> {
     let mut conditions = vec!["status = 'completed'".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
     if client_id != "__global__" && !client_id.is_empty() {
@@ -98,22 +104,64 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     }
     let wc = conditions.join(" AND ");
 
-    let (total_seconds, total_times, earliest_start, active_days): (i64, i64, Option<i64>, i64) = conn.query_row(
-        &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MIN(start_time), COALESCE(COUNT(DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch')), 0) FROM records WHERE {}", wc),
+    let mut stmt = conn.prepare(&format!(
+        "SELECT start_time, duration_seconds FROM records WHERE {} ORDER BY start_time ASC",
+        wc
+    ))?;
+    let rows: Vec<(i64, i64)> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    )?;
+        |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+    )?.collect::<Result<Vec<_>, _>>()?;
 
-    let earliest_start = earliest_start.unwrap_or(today);
-    let total_duration = today - earliest_start;
+    let now_utc = Utc::now();
+    let now_local = now_utc.with_timezone(tz);
+    let today_local = now_local.date_naive();
+    if rows.is_empty() {
+        let total = TotalStats {
+            total_days: 0,
+            active_days: 0,
+            total_seconds: 0,
+            total_times: 0,
+            mean_usage: 0,
+            total_ratio: 0.0,
+            total_day_ratio: 0.0,
+            from_date: today_local.format("%Y-%m-%d").to_string(),
+            total_duration_hr: human_readable_time(0),
+            total_seconds_hr: human_readable_time(0),
+            mean_usage_hr: human_readable_time(0),
+        };
+        let interval = IntervalStats {
+            current_interval: 0,
+            current_interval_hr: human_readable_time(0),
+            max_interval: 0,
+            max_interval_hr: human_readable_time(0),
+            mean_interval: 0,
+            mean_interval_hr: human_readable_time(0),
+        };
+        return Ok(Stats { total, past_n: vec![], interval });
+    }
+
+    let earliest_utc = DateTime::from_timestamp(rows.first().unwrap().0, 0).unwrap();
+    let earliest_local = earliest_utc.with_timezone(tz);
+    let earliest_date = earliest_local.date_naive();
+
+    let total_duration = (today_local - earliest_date).num_seconds();
     let total_days = total_duration / 86400;
+    let total_seconds: i64 = rows.iter().map(|(_, d)| d).sum();
+    let total_times = rows.len() as i64;
     let mean_usage = if total_times > 0 { total_seconds / total_times } else { 0 };
+
+    let mut active_dates = HashSet::new();
+    for (start_time, _) in &rows {
+        let dt = DateTime::from_timestamp(*start_time, 0).unwrap().with_timezone(tz);
+        active_dates.insert(dt.date_naive());
+    }
+    let active_days = active_dates.len() as i64;
+
     let total_ratio = calc_ratio(total_seconds, total_duration);
     let total_day_ratio = calc_ratio(active_days, total_days.max(1));
 
-    let from_date = DateTime::from_timestamp(earliest_start, 0)
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .unwrap_or_default();
+    let from_date = earliest_local.format("%Y-%m-%d").to_string();
 
     let total = TotalStats {
         total_days,
@@ -159,44 +207,40 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
 
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
-        let start = today - secs;
-        let mut c2 = conditions.clone();
-        c2.push("start_time > ?".to_string());
-        let mut p2 = param_refs.clone();
-        p2.push(&start);
-        let wc2 = c2.join(" AND ");
-        let (seconds, times, active_days): (i64, i64, i64) = conn.query_row(
-            &format!("SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), COALESCE(COUNT(DISTINCT strftime('%Y-%m-%d', start_time, 'unixepoch')), 0) FROM records WHERE {}", wc2),
-            rusqlite::params_from_iter(&p2),
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        let mean = if times > 0 { seconds / times } else { 0 };
-        let ratio = calc_ratio(seconds, secs);
+        let cutoff_local = today_local - chrono::Duration::seconds(secs);
+        let cutoff = tz.from_local_datetime(&cutoff_local.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
+
+        let mut period_seconds = 0i64;
+        let mut period_times = 0i64;
+        let mut period_dates = HashSet::new();
+
+        for (start_time, duration) in &rows {
+            if *start_time > cutoff {
+                period_seconds += duration;
+                period_times += 1;
+                let dt = DateTime::from_timestamp(*start_time, 0).unwrap().with_timezone(tz);
+                period_dates.insert(dt.date_naive());
+            }
+        }
+
+        let mean = if period_times > 0 { period_seconds / period_times } else { 0 };
+        let ratio = calc_ratio(period_seconds, secs);
         let days = secs / 86400;
-        let day_ratio = calc_ratio(active_days, days.max(1));
+        let day_ratio = calc_ratio(period_dates.len() as i64, days.max(1));
         past_n.push(PastNStat {
             name: name.to_string(),
-            seconds,
+            seconds: period_seconds,
             ratio,
-            times,
+            times: period_times,
             day_ratio,
-            days: active_days,
+            days: period_dates.len() as i64,
             mean_usage: mean,
         });
     }
 
-    let wc_start = conditions.join(" AND ");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT start_time FROM records WHERE {} ORDER BY start_time ASC",
-        wc_start
-    ))?;
-    let starts: Vec<i64> = stmt.query_map(
-        rusqlite::params_from_iter(&param_refs),
-        |row| row.get(0),
-    )?.collect::<Result<Vec<_>, _>>()?;
-
+    let starts: Vec<i64> = rows.iter().map(|(s, _)| *s).collect();
     let current_interval = if let Some(last) = starts.last() {
-        today - last
+        now_utc.timestamp() - last
     } else {
         0
     };
@@ -399,7 +443,7 @@ pub fn compute_stats_by_command(
     Ok(rows)
 }
 
-pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, command: &str) -> anyhow::Result<Vec<(String, i64)>> {
+pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, command: &str, tz: &Tz) -> anyhow::Result<Vec<(String, i64)>> {
     let mut conditions = vec!["status = 'completed'".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
     if client_id != "__global__" && !client_id.is_empty() {
@@ -419,18 +463,28 @@ pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, comma
     let wc = conditions.join(" AND ");
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT date(start_time, 'unixepoch', 'localtime') as day,
-                COALESCE(SUM(duration_seconds), 0)
-         FROM records WHERE {}
-         GROUP BY day
-         ORDER BY day ASC",
+        "SELECT start_time, duration_seconds FROM records WHERE {} ORDER BY start_time ASC",
         wc
     ))?;
-    let rows = stmt.query_map(
+    let rows: Vec<(i64, i64)> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?.collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+
+    let mut day_map: HashMap<NaiveDate, i64> = HashMap::new();
+    for (start_time, duration) in rows {
+        let utc = DateTime::from_timestamp(start_time, 0).unwrap_or_else(|| Utc::now());
+        let local = utc.with_timezone(tz);
+        let day = local.date_naive();
+        *day_map.entry(day).or_insert(0) += duration.max(0);
+    }
+
+    let mut result: Vec<(String, i64)> = day_map
+        .into_iter()
+        .map(|(day, seconds)| (day.format("%Y-%m-%d").to_string(), seconds))
+        .collect();
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
 }
 #[derive(Debug, Serialize)]
 pub struct SessionBucket {
@@ -560,6 +614,7 @@ pub fn compute_weekday_weekend_stats(
     client_id: &str,
     alias: &str,
     command: &str,
+    tz: &Tz,
 ) -> anyhow::Result<WeekdayWeekendStats> {
     let mut conditions = vec!["status = 'completed'".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
@@ -579,36 +634,29 @@ pub fn compute_weekday_weekend_stats(
     }
     let wc = conditions.join(" AND ");
 
-    let sql = format!(
-        "SELECT CASE WHEN strftime('%w', start_time, 'unixepoch', 'localtime') IN ('0','6') THEN 'weekend' ELSE 'weekday' END as day_type,
-                COALESCE(SUM(duration_seconds), 0), COUNT(*)
-         FROM records WHERE {}
-         GROUP BY day_type",
+    let mut stmt = conn.prepare(&format!(
+        "SELECT start_time, duration_seconds FROM records WHERE {}",
         wc
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
+    ))?;
+    let rows: Vec<(i64, i64)> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
-        |row| {
-            let day_type: String = row.get(0)?;
-            let total_seconds: i64 = row.get(1)?;
-            let total_times: i64 = row.get(2)?;
-            let mean = if total_times > 0 { total_seconds / total_times } else { 0 };
-            Ok((day_type, total_seconds, total_times, mean))
-        },
+        |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?.collect::<Result<Vec<_>, _>>()?;
 
     let mut weekday_total = 0i64;
     let mut weekday_times = 0i64;
     let mut weekend_total = 0i64;
     let mut weekend_times = 0i64;
-    for (dt, total, times, _) in rows {
-        if dt == "weekday" {
-            weekday_total = total;
-            weekday_times = times;
+    for (start_time, duration) in rows {
+        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let local = utc.with_timezone(tz);
+        let is_weekend = matches!(local.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+        if is_weekend {
+            weekend_total += duration;
+            weekend_times += 1;
         } else {
-            weekend_total = total;
-            weekend_times = times;
+            weekday_total += duration;
+            weekday_times += 1;
         }
     }
 
@@ -639,6 +687,7 @@ pub fn compute_streaks(
     client_id: &str,
     alias: &str,
     command: &str,
+    tz: &Tz,
 ) -> anyhow::Result<StreakStats> {
     let mut conditions = vec!["status = 'completed' AND duration_seconds > 0".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
@@ -659,25 +708,36 @@ pub fn compute_streaks(
     let wc = conditions.join(" AND ");
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT DISTINCT date(start_time, 'unixepoch', 'localtime') as day FROM records WHERE {} ORDER BY day ASC",
+        "SELECT start_time FROM records WHERE {} ORDER BY start_time ASC",
         wc
     ))?;
-    let days: Vec<String> = stmt.query_map(
+    let starts: Vec<i64> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
         |row| row.get(0),
     )?.collect::<Result<Vec<_>, _>>()?;
 
-    if days.is_empty() {
+    if starts.is_empty() {
         return Ok(StreakStats { current_streak: 0, max_streak: 0, last_active_date: "-".to_string(), last_active_time_hr: "-".to_string() });
     }
+
+    let mut days: Vec<NaiveDate> = starts
+        .into_iter()
+        .map(|ts| {
+            DateTime::from_timestamp(ts, 0)
+                .unwrap()
+                .with_timezone(tz)
+                .date_naive()
+        })
+        .collect();
+    days.sort();
+    days.dedup();
 
     let mut max_streak = 1i64;
     let mut current_streak = 1i64;
 
     for i in 1..days.len() {
-        let prev = chrono::NaiveDate::parse_from_str(&days[i - 1], "%Y-%m-%d").unwrap();
-        let curr = chrono::NaiveDate::parse_from_str(&days[i], "%Y-%m-%d").unwrap();
-        if (curr - prev).num_days() == 1 {
+        let diff = (days[i] - days[i - 1]).num_days();
+        if diff == 1 {
             current_streak += 1;
         } else {
             if current_streak > max_streak {
@@ -697,13 +757,13 @@ pub fn compute_streaks(
     )?;
     let last_active_time_hr = last_active_time
         .and_then(|ts| DateTime::from_timestamp(ts, 0))
-        .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+        .map(|d| d.with_timezone(tz).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| "-".to_string());
 
     Ok(StreakStats {
         current_streak,
         max_streak,
-        last_active_date: days.last().unwrap().clone(),
+        last_active_date: days.last().unwrap().format("%Y-%m-%d").to_string(),
         last_active_time_hr,
     })
 }
@@ -721,6 +781,7 @@ pub fn compute_monthly_trend(
     client_id: &str,
     alias: &str,
     command: &str,
+    tz: &Tz,
 ) -> anyhow::Result<Vec<MonthlyPoint>> {
     let mut conditions = vec!["status = 'completed'".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
@@ -741,26 +802,35 @@ pub fn compute_monthly_trend(
     let wc = conditions.join(" AND ");
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT strftime('%Y-%m', start_time, 'unixepoch', 'localtime') as ym,
-                COALESCE(SUM(duration_seconds), 0), COUNT(*)
-         FROM records WHERE {}
-         GROUP BY ym
-         ORDER BY ym ASC",
+        "SELECT start_time, duration_seconds FROM records WHERE {} ORDER BY start_time ASC",
         wc
     ))?;
-    let rows = stmt.query_map(
+    let rows: Vec<(i64, i64)> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
-        |row| {
-            let total_seconds: i64 = row.get(1)?;
-            Ok(MonthlyPoint {
-                year_month: row.get(0)?,
-                total_seconds,
-                total_times: row.get(2)?,
-                total_seconds_hr: human_readable_time(total_seconds),
-            })
-        },
+        |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?.collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+
+    let mut month_map: HashMap<String, (i64, i64)> = HashMap::new();
+    for (start_time, duration) in rows {
+        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let local = utc.with_timezone(tz);
+        let ym = local.format("%Y-%m").to_string();
+        let entry = month_map.entry(ym).or_insert((0, 0));
+        entry.0 += duration;
+        entry.1 += 1;
+    }
+
+    let mut result: Vec<MonthlyPoint> = month_map
+        .into_iter()
+        .map(|(ym, (seconds, times))| MonthlyPoint {
+            year_month: ym,
+            total_seconds: seconds,
+            total_times: times,
+            total_seconds_hr: human_readable_time(seconds),
+        })
+        .collect();
+    result.sort_by(|a, b| a.year_month.cmp(&b.year_month));
+    Ok(result)
 }
 
 #[derive(Debug, Serialize)]
@@ -774,6 +844,7 @@ pub fn compute_hourly_heatmap(
     client_id: &str,
     alias: &str,
     command: &str,
+    tz: &Tz,
 ) -> anyhow::Result<HourlyHeatmap> {
     let mut conditions = vec!["status = 'completed'".to_string()];
     let mut param_refs: Vec<&dyn rusqlite::ToSql> = Vec::new();
@@ -794,31 +865,24 @@ pub fn compute_hourly_heatmap(
     let wc = conditions.join(" AND ");
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT CAST(strftime('%w', start_time, 'unixepoch', 'localtime') AS INTEGER) as dow,
-                CAST(strftime('%H', start_time, 'unixepoch', 'localtime') AS INTEGER) as hour,
-                COALESCE(SUM(duration_seconds), 0)
-         FROM records WHERE {}
-         GROUP BY dow, hour",
+        "SELECT start_time, duration_seconds FROM records WHERE {}",
         wc
     ))?;
-
-    let mut grid = vec![vec![0i64; 24]; 7];
-    let rows = stmt.query_map(
+    let rows: Vec<(i64, i64)> = stmt.query_map(
         rusqlite::params_from_iter(&param_refs),
-        |row| {
-            let sqlite_dow: i32 = row.get(0)?;
-            let hour: i32 = row.get(1)?;
-            let seconds: i64 = row.get(2)?;
-            let mapped_dow = if sqlite_dow == 0 { 6 } else { sqlite_dow - 1 };
-            Ok((mapped_dow, hour, seconds))
-        },
+        |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?.collect::<Result<Vec<_>, _>>()?;
 
+    let mut grid = vec![vec![0i64; 24]; 7];
     let mut max_seconds = 0i64;
-    for (dow, hour, seconds) in rows {
-        grid[dow as usize][hour as usize] = seconds;
-        if seconds > max_seconds {
-            max_seconds = seconds;
+    for (start_time, duration) in rows {
+        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let local = utc.with_timezone(tz);
+        let dow = local.weekday().num_days_from_monday() as usize;
+        let hour = local.hour() as usize;
+        grid[dow][hour] += duration;
+        if grid[dow][hour] > max_seconds {
+            max_seconds = grid[dow][hour];
         }
     }
 

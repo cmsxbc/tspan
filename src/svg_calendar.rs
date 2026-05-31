@@ -1,4 +1,5 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Utc};
+use chrono_tz::Tz;
 
 // Exact parameters from reference/calendarimg.sh/calendarimg.sh
 const INNER: i32 = 15;
@@ -123,6 +124,7 @@ pub fn generate_svg_calendar(
     data: &[(String, i64)],
     year: Option<i32>,
     scheme: ColorScheme,
+    tz: &Tz,
 ) -> String {
     if data.is_empty() {
         return "<svg width=\"100\" height=\"50\" xmlns=\"http://www.w3.org/2000/svg\"><text x=\"10\" y=\"30\" font-size=\"12\" fill=\"#666\">No data</text></svg>".to_string();
@@ -130,8 +132,8 @@ pub fn generate_svg_calendar(
 
     let (start_date, end_date) = if let Some(y) = year {
         let s = NaiveDate::from_ymd_opt(y, 1, 1).unwrap();
-        let e = if y == chrono::Local::now().year() {
-            chrono::Local::now().naive_local().date()
+        let e = if y == Utc::now().with_timezone(tz).year() {
+            Utc::now().with_timezone(tz).date_naive()
         } else {
             NaiveDate::from_ymd_opt(y, 12, 31).unwrap()
         };
@@ -139,7 +141,7 @@ pub fn generate_svg_calendar(
     } else {
         let first = NaiveDate::parse_from_str(&data[0].0, "%Y-%m-%d").unwrap();
         let last = NaiveDate::parse_from_str(&data[data.len() - 1].0, "%Y-%m-%d").unwrap();
-        let today = chrono::Local::now().naive_local().date();
+        let today = Utc::now().with_timezone(tz).date_naive();
         (first, today.max(last))
     };
 
@@ -384,7 +386,7 @@ pub fn generate_svg_calendar(
     svg
 }
 
-pub fn generate_all_years_svgs(data: &[(String, i64)], scheme: ColorScheme) -> Vec<(String, String)> {
+pub fn generate_all_years_svgs(data: &[(String, i64)], scheme: ColorScheme, tz: &Tz) -> Vec<(String, String)> {
     let mut years_data: std::collections::HashMap<i32, Vec<(String, i64)>> = std::collections::HashMap::new();
     for (day, secs) in data {
         if let Ok(date) = NaiveDate::parse_from_str(day, "%Y-%m-%d") {
@@ -397,7 +399,7 @@ pub fn generate_all_years_svgs(data: &[(String, i64)], scheme: ColorScheme) -> V
 
     years.into_iter()
         .map(|y| {
-            let svg = generate_svg_calendar(&years_data[&y], Some(y), scheme);
+            let svg = generate_svg_calendar(&years_data[&y], Some(y), scheme, tz);
             (y.to_string(), svg)
         })
         .collect()

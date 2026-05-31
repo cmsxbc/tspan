@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{AuthConfig, check_api_auth, check_web_auth};
 use crate::db::{self, DbPool};
-use crate::stats::{self, compute_stats};
+use crate::stats::{self, compute_stats, resolve_tz};
 use crate::svg_calendar::{generate_all_years_svgs, generate_svg_calendar, scheme_by_name, SCHEME_HEATMAP};
 use crate::markdown::generate_markdown_report;
 
@@ -86,6 +86,7 @@ pub struct FilterQuery {
     pub command: Option<String>,
     pub color_scheme: Option<String>,
     pub depth: Option<usize>,
+    pub tz: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -346,8 +347,9 @@ async fn api_get_stats(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let stats = compute_stats(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -436,8 +438,9 @@ async fn api_get_weekday_weekend_stats(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let data = stats::compute_weekday_weekend_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let data = stats::compute_weekday_weekend_stats(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Weekday/weekend stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -455,8 +458,9 @@ async fn api_get_streaks(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let data = stats::compute_streaks(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let data = stats::compute_streaks(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Streaks error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -474,8 +478,9 @@ async fn api_get_monthly_trend(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let data = stats::compute_monthly_trend(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let data = stats::compute_monthly_trend(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Monthly trend error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -493,8 +498,9 @@ async fn api_get_hourly_heatmap(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let data = stats::compute_hourly_heatmap(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let data = stats::compute_hourly_heatmap(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Hourly heatmap error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -512,19 +518,20 @@ async fn api_get_summary_md(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let stats = compute_stats(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let stats = compute_stats(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Stats error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
-    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
 
-    let all_svg = generate_svg_calendar(&daily, None, SCHEME_HEATMAP);
-    let year_svgs = generate_all_years_svgs(&daily, SCHEME_HEATMAP);
+    let all_svg = generate_svg_calendar(&daily, None, SCHEME_HEATMAP, &tz);
+    let year_svgs = generate_all_years_svgs(&daily, SCHEME_HEATMAP, &tz);
 
     let md = generate_markdown_report(&stats, &all_svg, &year_svgs);
 
@@ -746,6 +753,8 @@ function buildParams(obj) {
   if(f.command) p.set('command', f.command);
   const scheme = localStorage.getItem('tspan_color_scheme');
   if(scheme) p.set('color_scheme', scheme);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if(tz) p.set('tz', tz);
   return p;
 }
 function readUrlFilters() {
@@ -828,7 +837,14 @@ async function loadAliases() {
 function fmtDate(ts) {
   if(!ts) return '-';
   const d = new Date(ts*1000);
-  return d.toISOString().slice(0,19).replace('T',' ');
+  const pad = n => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 function fmtDur(s) {
   if(s==null) return '-';
@@ -1235,12 +1251,14 @@ async fn web_index(
 }
 
 async fn web_admin(
+    Query(q): Query<FilterQuery>,
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Html<String>, Response> {
     if check_web_auth(&state, &headers).await.is_err() {
         return Err(unauthorized_web_response());
     }
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
     let orphaned = match db::get_orphaned_sessions_admin(&mut conn) {
         Ok(r) => r,
@@ -1299,10 +1317,10 @@ th{font-size:12px;color:#666;font-weight:600}
         html.push_str(r#"<table><tr><th>ID</th><th>Name</th><th>Created</th><th>Last Seen</th></tr>"#);
         for c in &clients {
             let created = chrono::DateTime::from_timestamp(c.created_at, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .map(|d| d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
             let last_seen = chrono::DateTime::from_timestamp(c.last_seen, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .map(|d| d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
             html.push_str(&format!(
                 r#"<tr><td class="code">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
@@ -1325,7 +1343,7 @@ th{font-size:12px;color:#666;font-weight:600}
         for r in &orphaned {
             let running = now - r.start_time;
             let start_str = chrono::DateTime::from_timestamp(r.start_time, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .map(|d| d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
             let cmd = r.command.as_deref().unwrap_or("-");
             let alias = r.alias.as_deref().unwrap_or("-");
@@ -1351,7 +1369,7 @@ th{font-size:12px;color:#666;font-weight:600}
         html.push_str(r#"<table><tr><th>Token</th><th>Client</th><th>Description</th><th>Created</th><th>Action</th></tr>"#);
         for t in &tokens {
             let created = chrono::DateTime::from_timestamp(t.created_at, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .map(|d| d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
             let preview = if t.token.len() > 12 {
                 format!("{}****{}", &t.token[..6], &t.token[t.token.len()-4..])
@@ -1414,7 +1432,14 @@ async function revokeToken(token) {
 function fmtDate(ts) {
     if(!ts) return '-';
     const d = new Date(ts*1000);
-    return d.toISOString().slice(0,19).replace('T',' ');
+    const pad = n => String(n).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const mi = pad(d.getMinutes());
+    const ss = pad(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 function fmtDur(s) {
     if(s==null) return '-';
@@ -1624,8 +1649,9 @@ async fn api_get_daily_data(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let data = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let data = stats::get_daily_data(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
@@ -1643,14 +1669,15 @@ async fn api_get_svg(
     let client_id = q.client_id.unwrap_or_else(|| "__global__".to_string());
     let alias = q.alias.unwrap_or_default();
     let command = q.command.unwrap_or_default();
+    let tz = resolve_tz(q.tz.as_deref());
     let mut conn = state.pool.lock();
-    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command).map_err(|e| {
+    let daily = stats::get_daily_data(&mut conn, &client_id, &alias, &command, &tz).map_err(|e| {
         tracing::error!("Daily data error: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     })?;
     let scheme = scheme_by_name(q.color_scheme.as_deref().unwrap_or("heatmap"));
-    let all_time = generate_svg_calendar(&daily, None, scheme);
-    let years = generate_all_years_svgs(&daily, scheme);
+    let all_time = generate_svg_calendar(&daily, None, scheme, &tz);
+    let years = generate_all_years_svgs(&daily, scheme, &tz);
     Ok(Json(SvgResp { all_time, years }))
 }
 
