@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/cc-debian12
 WORKDIR /app
 COPY --from=builder /app/target/release/tspan-server /app/tspan-server
+COPY --from=builder /app/target/release/tspan-backup /app/tspan-backup
 # data.db will be mounted via PVC to /app/data/
 ENV DATABASE_URL=/app/data/data.db
 ENV BIND_ADDR=0.0.0.0:8080

@@ -597,7 +597,7 @@ async fn api_backup(
             tracing::error!("Backup init error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         })?;
-        backup.run_to_completion(5, std::time::Duration::from_millis(100), None).map_err(|e| {
+        backup.run_to_completion(500, std::time::Duration::from_millis(10), None).map_err(|e| {
             tracing::error!("Backup run error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         })?;

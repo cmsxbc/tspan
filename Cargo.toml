@@ -3,6 +3,10 @@ name = "tspan-server"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "tspan-backup"
+path = "src/bin/backup.rs"
+
 [dependencies]
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
@@ -22,3 +26,4 @@ config = "0.14"
 shlex = "1.3"
 anyhow = "1"
 parking_lot = "0.12"
+ureq = "3"
