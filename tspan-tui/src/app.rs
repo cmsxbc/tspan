@@ -44,6 +44,7 @@ pub struct TuiOptions {
     pub username: String,
     pub password: String,
     pub initial_client_id: String,
+    pub initial_alias: String,
     pub timezone: String,
     pub page_size: u16,
     pub verbose_log: Option<PathBuf>,
@@ -298,12 +299,21 @@ impl ApiClient {
             .with_context(|| format!("{action}: server returned invalid JSON"))
     }
 
-    fn overview(&self, client_id: &str, timezone: Tz) -> Result<OverviewData> {
+    fn overview(&self, client_id: &str, alias: &str, timezone: Tz) -> Result<OverviewData> {
         let client = client_id.to_string();
+        let alias = alias.to_string();
         let tz = timezone.to_string();
-        let filters = [("client_id", client.clone()), ("tz", tz)];
-        let grouped_filter = [("client_id", client.clone())];
-        let command_filter = [("client_id", client), ("depth", "1".to_string())];
+        let filters = [
+            ("client_id", client.clone()),
+            ("alias", alias.clone()),
+            ("tz", tz),
+        ];
+        let grouped_filter = [("client_id", client.clone()), ("alias", alias.clone())];
+        let command_filter = [
+            ("client_id", client),
+            ("alias", alias),
+            ("depth", "1".to_string()),
+        ];
         Ok(OverviewData {
             stats: self.get_json("stats", &filters, "load summary statistics")?,
             streaks: self.get_json("stats/streaks", &filters, "load streak statistics")?,
@@ -326,9 +336,10 @@ impl ApiClient {
         })
     }
 
-    fn analytics(&self, client_id: &str, timezone: Tz) -> Result<AnalyticsData> {
+    fn analytics(&self, client_id: &str, alias: &str, timezone: Tz) -> Result<AnalyticsData> {
         let filters = [
             ("client_id", client_id.to_string()),
+            ("alias", alias.to_string()),
             ("tz", timezone.to_string()),
         ];
         Ok(AnalyticsData {
@@ -347,11 +358,22 @@ impl ApiClient {
         self.get_json("clients", &[], "load clients")
     }
 
-    fn records(&self, client_id: &str, page: i64, page_size: i64) -> Result<RecordsPageResp> {
+    fn aliases(&self) -> Result<Vec<String>> {
+        self.get_json("aliases", &[], "load aliases")
+    }
+
+    fn records(
+        &self,
+        client_id: &str,
+        alias: &str,
+        page: i64,
+        page_size: i64,
+    ) -> Result<RecordsPageResp> {
         self.get_json(
             "records",
             &[
                 ("client_id", client_id.to_string()),
+                ("alias", alias.to_string()),
                 ("page", page.to_string()),
                 ("per_page", page_size.to_string()),
             ],
@@ -571,6 +593,8 @@ struct App {
     breakdown_offset: usize,
     client_ids: Vec<String>,
     client_index: usize,
+    aliases: Vec<String>,
+    alias_index: usize,
     overview: Option<OverviewData>,
     analytics: Option<AnalyticsData>,
     records: Vec<RecordPageItem>,
@@ -606,6 +630,7 @@ impl App {
         } else {
             options.initial_client_id
         };
+        let initial_alias = options.initial_alias;
         let mut app = Self {
             api,
             timezone,
@@ -616,6 +641,8 @@ impl App {
             breakdown_offset: 0,
             client_ids: vec![GLOBAL_CLIENT.to_string()],
             client_index: 0,
+            aliases: vec![String::new()],
+            alias_index: 0,
             overview: None,
             analytics: None,
             records: Vec::new(),
@@ -634,6 +661,7 @@ impl App {
             last_refresh: Instant::now(),
         };
         app.refresh_client_ids(Some(&initial_client_id))?;
+        app.refresh_aliases(Some(&initial_alias))?;
         app.refresh_all()?;
         Ok(app)
     }
@@ -650,6 +678,21 @@ impl App {
             "all clients"
         } else {
             self.current_client()
+        }
+    }
+
+    fn current_alias(&self) -> &str {
+        self.aliases
+            .get(self.alias_index)
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
+
+    fn current_alias_label(&self) -> &str {
+        if self.current_alias().is_empty() {
+            "all aliases"
+        } else {
+            self.current_alias()
         }
     }
 
@@ -675,24 +718,48 @@ impl App {
         Ok(())
     }
 
+    fn refresh_aliases(&mut self, preferred: Option<&str>) -> Result<()> {
+        let existing = preferred
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.current_alias().to_string());
+        let mut aliases = self.api.aliases()?;
+        aliases.retain(|alias| !alias.is_empty());
+        aliases.sort();
+        aliases.dedup();
+        self.aliases = vec![String::new()];
+        self.aliases.extend(aliases);
+        if !existing.is_empty() && !self.aliases.contains(&existing) {
+            self.aliases.push(existing.clone());
+            self.aliases[1..].sort();
+        }
+        self.alias_index = self
+            .aliases
+            .iter()
+            .position(|alias| alias == &existing)
+            .unwrap_or(0);
+        Ok(())
+    }
+
     fn refresh_all(&mut self) -> Result<()> {
         self.refresh_client_ids(None)?;
+        self.refresh_aliases(None)?;
         let client_id = self.current_client().to_string();
+        let alias = self.current_alias().to_string();
         let old_record_selection = self.records_state.selected().unwrap_or(0);
         let old_active_selection = self.active_state.selected().unwrap_or(0);
         let old_token_selection = self.tokens_state.selected().unwrap_or(0);
 
-        let overview = self.api.overview(&client_id, self.timezone)?;
-        let analytics = self.api.analytics(&client_id, self.timezone)?;
-        let mut record_page = self
-            .api
-            .records(&client_id, self.records_page, self.page_size)?;
+        let overview = self.api.overview(&client_id, &alias, self.timezone)?;
+        let analytics = self.api.analytics(&client_id, &alias, self.timezone)?;
+        let mut record_page =
+            self.api
+                .records(&client_id, &alias, self.records_page, self.page_size)?;
         let pages = total_pages(record_page.total, self.page_size);
         if self.records_page > pages {
             self.records_page = pages;
-            record_page = self
-                .api
-                .records(&client_id, self.records_page, self.page_size)?;
+            record_page =
+                self.api
+                    .records(&client_id, &alias, self.records_page, self.page_size)?;
         }
         let missing_record_status = record_page
             .records
@@ -703,6 +770,9 @@ impl App {
         if client_id != GLOBAL_CLIENT {
             active.retain(|record| record.client_id == client_id);
             tokens.retain(|token| token.client_id == client_id);
+        }
+        if !alias.is_empty() {
+            active.retain(|record| record.alias.as_deref() == Some(alias.as_str()));
         }
 
         self.overview = Some(overview);
@@ -752,7 +822,34 @@ impl App {
         if let Err(error) = self.refresh_all() {
             self.set_error(error);
         } else {
-            self.set_notice(format!("Showing {}", self.current_client_label()));
+            self.set_notice(format!(
+                "Showing {} · {}",
+                self.current_client_label(),
+                self.current_alias_label()
+            ));
+        }
+    }
+
+    fn cycle_alias(&mut self, forward: bool) {
+        if self.aliases.len() <= 1 {
+            return;
+        }
+        if forward {
+            self.alias_index = (self.alias_index + 1) % self.aliases.len();
+        } else {
+            self.alias_index = (self.alias_index + self.aliases.len() - 1) % self.aliases.len();
+        }
+        self.records_page = 1;
+        self.breakdown_offset = 0;
+        self.calendar_offset_weeks = 0;
+        if let Err(error) = self.refresh_all() {
+            self.set_error(error);
+        } else {
+            self.set_notice(format!(
+                "Showing {} · {}",
+                self.current_client_label(),
+                self.current_alias_label()
+            ));
         }
     }
 
@@ -809,6 +906,8 @@ impl App {
             },
             KeyCode::Char(']') => self.cycle_client(true),
             KeyCode::Char('[') => self.cycle_client(false),
+            KeyCode::Char('}') => self.cycle_alias(true),
+            KeyCode::Char('{') => self.cycle_alias(false),
             _ => self.handle_view_key(key.code),
         }
     }
@@ -1212,9 +1311,10 @@ impl App {
             ""
         };
         let title = format!(
-            " TSPAN Admin · {} · {} · {}{} ",
+            " TSPAN Admin · {} · {} · {} · {}{} ",
             self.api.label(),
             self.current_client_label(),
+            self.current_alias_label(),
             self.timezone,
             compatibility
         );
@@ -1242,20 +1342,16 @@ impl App {
 
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         let help = match self.view {
-            View::Overview => "[ ] client  r refresh  Tab view  ? help  q quit",
-            View::Breakdown => {
-                "←/→ category  ↑/↓ scroll  [ ] client  r refresh  Tab view  ? help  q quit"
-            }
+            View::Overview => "[/] client  {/} alias  r refresh  Tab view  ? help  q quit",
+            View::Breakdown => "←/→ category  ↑/↓ scroll  [/] client  {/} alias  r refresh  ? help",
             View::Records => {
-                "↑/↓ select  ←/→ page  d delete  [ ] client  r refresh  Tab view  ? help  q quit"
+                "↑/↓ select  ←/→ page  d delete  [/] client  {/} alias  r refresh  ? help"
             }
             View::Active => {
-                "↑/↓ select  e end  d discard  [ ] client  r refresh  Tab view  ? help  q quit"
+                "↑/↓ select  e end  d discard  [/] client  {/} alias  r refresh  ? help"
             }
-            View::Tokens => {
-                "↑/↓ select  n new  d revoke  [ ] client  r refresh  Tab view  ? help  q quit"
-            }
-            View::Analytics => "←/→ graph  j/k history  [/] client  r refresh  ? help  q quit",
+            View::Tokens => "↑/↓ select  n new  d revoke  [/] client  {/} alias  r refresh  ? help",
+            View::Analytics => "←/→ graph  j/k history  [/] client  {/} alias  r refresh  ? help",
         };
         let notice = self.notice.as_ref();
         let notice_style = match notice {
@@ -1919,6 +2015,7 @@ impl App {
                     Line::from("  1–6 / Tab   switch views"),
                     Line::from("  ↑/↓ / j/k   select or scroll"),
                     Line::from("  [ / ]       change client filter"),
+                    Line::from("  { / }       change alias filter"),
                     Line::from("  r           refresh (automatic every 10s)"),
                     Line::from("  q / Ctrl-C  quit"),
                     Line::from("View actions"),
@@ -2346,6 +2443,7 @@ mod tests {
 
     struct MockState {
         fixture: Fixture,
+        requests: Mutex<Vec<String>>,
         record_deleted: AtomicBool,
         session_ended: AtomicBool,
         token_revoked: AtomicBool,
@@ -2354,6 +2452,7 @@ mod tests {
     struct TestServer {
         address: SocketAddr,
         stop: Arc<AtomicBool>,
+        state: Arc<MockState>,
         thread: Option<JoinHandle<()>>,
         url: String,
     }
@@ -2365,10 +2464,12 @@ mod tests {
             let stop = Arc::new(AtomicBool::new(false));
             let state = Arc::new(MockState {
                 fixture,
+                requests: Mutex::new(Vec::new()),
                 record_deleted: AtomicBool::new(false),
                 session_ended: AtomicBool::new(false),
                 token_revoked: AtomicBool::new(false),
             });
+            let server_state = state.clone();
             let thread_stop = stop.clone();
             let thread = thread::spawn(move || {
                 for stream in listener.incoming() {
@@ -2383,6 +2484,7 @@ mod tests {
             Self {
                 address,
                 stop,
+                state: server_state,
                 thread: Some(thread),
                 url: format!("http://{address}"),
             }
@@ -2415,6 +2517,7 @@ mod tests {
         let mut parts = first_line.split_whitespace();
         let method = parts.next().unwrap_or_default();
         let path = parts.next().unwrap_or_default();
+        state.requests.lock().unwrap().push(path.to_string());
         let (status, body) = if authenticated {
             mock_response(method, path, state)
         } else {
@@ -2438,8 +2541,9 @@ mod tests {
         let route = path.split('?').next().unwrap_or(path);
         match (method, route) {
             ("GET", "/api/clients") => (200, clients_payload(state.fixture)),
+            ("GET", "/api/aliases") => (200, aliases_payload(state.fixture)),
             ("GET", "/api/admin/tokens") => (200, tokens_payload(state)),
-            ("GET", "/api/records") => (200, records_payload(state)),
+            ("GET", "/api/records") => (200, records_payload(state, path)),
             ("GET", "/api/sessions/orphaned") => (200, active_payload(state)),
             ("GET", "/api/stats") => (200, stats_payload(state.fixture)),
             ("GET", "/api/stats/streaks") => (200, streaks_payload()),
@@ -2487,6 +2591,15 @@ mod tests {
         .to_string()
     }
 
+    fn aliases_payload(fixture: Fixture) -> String {
+        match fixture {
+            Fixture::Empty | Fixture::Actions => json!([]),
+            Fixture::Workstation => json!(["development", "meetings"]),
+            Fixture::Legacy => json!(["网络中断: 192.168.71.1"]),
+        }
+        .to_string()
+    }
+
     fn tokens_payload(state: &MockState) -> String {
         let tokens = match state.fixture {
             Fixture::Empty => json!([]),
@@ -2516,10 +2629,10 @@ mod tests {
         tokens.to_string()
     }
 
-    fn records_payload(state: &MockState) -> String {
+    fn records_payload(state: &MockState, path: &str) -> String {
         let mut records = Vec::new();
         match state.fixture {
-            Fixture::Workstation => records.push(json!({
+            Fixture::Workstation if !path.contains("alias=meetings") => records.push(json!({
                 "id": 1,
                 "client_id": "workstation",
                 "alias": "development",
@@ -2529,6 +2642,7 @@ mod tests {
                 "duration_seconds": 120,
                 "status": "completed"
             })),
+            Fixture::Workstation => {}
             Fixture::Legacy => records.push(json!({
                 "id": 1083,
                 "client_id": "network",
@@ -2585,7 +2699,7 @@ mod tests {
                     "start_time": 1_700_000_200,
                     "running_seconds": 30,
                     "command": "vim",
-                    "alias": null,
+                    "alias": "development",
                     "process_id": null
                 },
                 {
@@ -2756,6 +2870,7 @@ mod tests {
             username: "admin".to_string(),
             password: "secret".to_string(),
             initial_client_id: client_id.to_string(),
+            initial_alias: String::new(),
             timezone: "UTC".to_string(),
             page_size: 25,
             verbose_log: None,
@@ -2780,6 +2895,56 @@ mod tests {
         assert_eq!(analytics.monthly.len(), 2);
         assert_eq!(analytics.hourly.grid.len(), 7);
         assert_eq!(analytics.weekday_weekend.weekday_times, 6);
+    }
+
+    #[test]
+    fn alias_filter_cycles_and_filters_records_and_active_sessions() {
+        let server = TestServer::new(Fixture::Workstation);
+        let mut app = App::new(options(&server, "workstation")).unwrap();
+
+        assert_eq!(app.current_alias(), "");
+        assert_eq!(app.records.len(), 1);
+        assert_eq!(app.active.len(), 1);
+
+        app.cycle_alias(true);
+        assert_eq!(app.current_alias(), "development");
+        assert_eq!(app.records.len(), 1);
+        assert_eq!(app.active.len(), 1);
+        let requests = server.state.requests.lock().unwrap();
+        for route in [
+            "/api/stats",
+            "/api/stats/streaks",
+            "/api/stats/session-distribution",
+            "/api/daily-data",
+            "/api/stats/monthly-trend",
+            "/api/stats/hourly-heatmap",
+            "/api/stats/weekday-weekend",
+            "/api/records",
+        ] {
+            assert!(requests.iter().any(|request| {
+                request.split('?').next() == Some(route) && request.contains("alias=development")
+            }));
+        }
+        drop(requests);
+
+        app.cycle_alias(true);
+        assert_eq!(app.current_alias(), "meetings");
+        assert!(app.records.is_empty());
+        assert!(app.active.is_empty());
+
+        app.cycle_alias(true);
+        assert_eq!(app.current_alias(), "");
+    }
+
+    #[test]
+    fn initial_alias_is_preserved_even_when_not_returned_by_server() {
+        let server = TestServer::new(Fixture::Empty);
+        let mut options = options(&server, GLOBAL_CLIENT);
+        options.initial_alias = "custom alias".to_string();
+
+        let app = App::new(options).unwrap();
+        assert_eq!(app.current_alias(), "custom alias");
+        assert!(app.aliases.iter().any(|alias| alias == "custom alias"));
     }
 
     #[test]

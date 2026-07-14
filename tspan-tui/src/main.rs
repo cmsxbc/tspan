@@ -28,6 +28,10 @@ struct Cli {
     #[arg(long, default_value = "__global__")]
     client_id: String,
 
+    /// Initially selected alias (defaults to all aliases)
+    #[arg(long, default_value = "")]
+    alias: String,
+
     /// Time zone used to display timestamps and compute daily statistics
     #[arg(long, default_value = "UTC")]
     timezone: String,
@@ -62,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         username: cli.username,
         password: cli.password,
         initial_client_id: cli.client_id,
+        initial_alias: cli.alias,
         timezone: cli.timezone,
         page_size: cli.page_size,
         verbose_log,
@@ -94,5 +99,11 @@ mod tests {
             resolve_verbose_log(cli.verbose, cli.verbose_log),
             Some(PathBuf::from("trace.log"))
         );
+    }
+
+    #[test]
+    fn initial_alias_flag_is_accepted() {
+        let cli = Cli::try_parse_from(["tspan-tui", "--alias", "development"]).unwrap();
+        assert_eq!(cli.alias, "development");
     }
 }

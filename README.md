@@ -62,10 +62,11 @@ export TSPAN_TUI_PASSWORD='your-admin-password'
   --server https://tspan.example.com \
   --username admin
 
-# Start on one client, use local time, and show 50 records per page
+# Start on one client and alias, use local time, and show 50 records per page
 ./target/release/tspan-tui \
   --server https://tspan.example.com \
   --client-id workstation \
+  --alias development \
   --timezone America/New_York \
   --page-size 50
 
@@ -89,6 +90,7 @@ The TUI provides summary and grouped statistics, paginated record browsing, acti
 | `↑` / `↓` or `j` / `k` | Move or scroll |
 | `←` / `→` or `h` / `l` | Change analytics graph or breakdown table |
 | `[` / `]` | Change the client filter |
+| `{` / `}` | Change the alias filter |
 | `r` | Refresh (data also refreshes every 10 seconds) |
 | `d` | Delete, discard, or revoke the selected item after confirmation |
 | `q` / `Ctrl-C` | Quit |
