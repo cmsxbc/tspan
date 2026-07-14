@@ -5,6 +5,7 @@ edition = "2021"
 
 [workspace]
 members = ["tspan-tui"]
+default-members = [".", "tspan-tui"]
 resolver = "2"
 
 [[bin]]
