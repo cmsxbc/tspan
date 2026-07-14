@@ -1,10 +1,10 @@
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TotalStats {
     pub total_days: i64,
     pub active_days: i64,
@@ -19,7 +19,7 @@ pub struct TotalStats {
     pub mean_usage_hr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PastNStat {
     pub name: String,
     pub seconds: i64,
@@ -30,7 +30,7 @@ pub struct PastNStat {
     pub mean_usage: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct IntervalStats {
     pub current_interval: i64,
     pub current_interval_hr: String,
@@ -40,7 +40,7 @@ pub struct IntervalStats {
     pub mean_interval_hr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Stats {
     pub total: TotalStats,
     pub past_n: Vec<PastNStat>,
@@ -266,7 +266,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     Ok(Stats { total, past_n, interval })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ClientStat {
     pub client_id: String,
     pub total_seconds: i64,
@@ -276,7 +276,7 @@ pub struct ClientStat {
     pub mean_seconds_hr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AliasStat {
     pub alias: String,
     pub total_seconds: i64,
@@ -286,7 +286,7 @@ pub struct AliasStat {
     pub mean_seconds_hr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CommandStat {
     pub command: String,
     pub total_seconds: i64,
@@ -486,14 +486,14 @@ pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, comma
     result.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(result)
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SessionBucket {
     pub label: String,
     pub count: i64,
     pub pct: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SessionDistribution {
     pub max_seconds: i64,
     pub min_seconds: i64,
@@ -674,7 +674,7 @@ pub fn compute_weekday_weekend_stats(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct StreakStats {
     pub current_streak: i64,
     pub max_streak: i64,

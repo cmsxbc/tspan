@@ -50,17 +50,23 @@ TSPANRUN_ALIAS="模型训练" ./tspanrun python train.py --epochs 100
 
 ### Terminal Admin Interface
 
-Run the interactive TUI against the local SQLite database:
+Run the interactive TUI against a tspan server. Supplying the password through the environment keeps it out of shell history and process arguments:
 
 ```bash
-./target/release/tspan-server --database data.db tui
+export TSPAN_TUI_PASSWORD='your-admin-password'
+./target/release/tspan-server tui \
+  --server https://tspan.example.com \
+  --username admin
 
 # Start on one client, use local time, and show 50 records per page
-./target/release/tspan-server --database data.db tui \
+./target/release/tspan-server tui \
+  --server https://tspan.example.com \
   --client-id workstation \
   --timezone America/New_York \
   --page-size 50
 ```
+
+`TSPAN_TUI_SERVER` and `TSPAN_TUI_USERNAME` can also provide the server URL and username. The TUI authenticates with HTTP Basic Auth and uses only `/api/*` endpoints—it never opens or requires access to the server's SQLite database. Use HTTPS when connecting across a network so the credentials are encrypted in transit.
 
 The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
 
@@ -73,11 +79,9 @@ The TUI provides summary and grouped statistics, paginated record browsing, acti
 | `d` | Delete, discard, or revoke the selected item after confirmation |
 | `q` / `Ctrl-C` | Quit |
 
-This is a local admin tool: it accesses SQLite directly instead of calling the HTTP API. Run it on the server host (or wherever the database volume is mounted) with filesystem permission to read and update the database. SQLite WAL mode and the configured busy timeout allow it to run alongside the server.
-
 ## API Endpoints
 
-All `/api/*` endpoints require `Authorization: Bearer <token>`.
+Client ingestion endpoints use `Authorization: Bearer <token>`. Statistics and admin endpoints use HTTP Basic Auth; ending a session accepts either authentication method.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

@@ -54,13 +54,13 @@ pub struct StartSessionResp {
     pub start_time: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct EndSessionResp {
     pub session_id: i64,
     pub duration_seconds: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct OrphanedSession {
     pub id: i64,
     pub client_id: String,
@@ -95,13 +95,13 @@ pub struct SvgResp {
     pub years: Vec<(String, String)>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct CreateTokenReq {
     pub client_id: Option<String>,
     pub description: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct CreateTokenResp {
     pub token: String,
 }
@@ -115,7 +115,7 @@ pub struct ListRecordsQuery {
     pub command: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RecordPageItem {
     pub id: i64,
     pub client_id: String,
@@ -124,9 +124,10 @@ pub struct RecordPageItem {
     pub start_time: i64,
     pub end_time: Option<i64>,
     pub duration_seconds: Option<i64>,
+    pub status: String,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RecordsPageResp {
     pub records: Vec<RecordPageItem>,
     pub total: i64,
@@ -1525,6 +1526,7 @@ async fn api_list_records(
         start_time: r.start_time,
         end_time: r.end_time,
         duration_seconds: r.duration_seconds,
+        status: r.status,
     }).collect();
 
     Ok(Json(RecordsPageResp {
