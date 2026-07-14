@@ -8,6 +8,7 @@ mod markdown;
 mod server;
 mod stats;
 mod svg_calendar;
+mod tui;
 
 use auth::AuthConfig;
 use server::AppState;
@@ -59,6 +60,22 @@ enum Commands {
     TokenRevoke {
         token: String,
     },
+    /// Open the interactive terminal admin interface
+    Tui {
+        /// Initially selected client (defaults to all clients)
+        #[arg(long, default_value = "__global__")]
+        client_id: String,
+        /// Time zone used to display timestamps and compute daily statistics
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        /// Number of records shown on each page
+        #[arg(
+            long,
+            default_value_t = 25,
+            value_parser = clap::value_parser!(u16).range(5..=200)
+        )]
+        page_size: u16,
+    },
 }
 
 #[tokio::main]
@@ -108,6 +125,21 @@ async fn main() -> anyhow::Result<()> {
                 println!("Token not found.");
             }
             Ok(())
+        }
+        Some(Commands::Tui {
+            client_id,
+            timezone,
+            page_size,
+        }) => {
+            tui::run(
+                pool,
+                tui::TuiOptions {
+                    initial_client_id: client_id,
+                    timezone,
+                    page_size,
+                    command_token_limit: cli.command_token_limit,
+                },
+            )
         }
         None => {
             // Default: start server

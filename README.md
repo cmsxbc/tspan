@@ -48,6 +48,33 @@ TSPANRUN_ALIAS="模型训练" ./tspanrun python train.py --epochs 100
 - **Stats**: http://localhost:8080/ (HTTP Basic Auth)
 - **Admin**: http://localhost:8080/admin (orphaned sessions + API token management)
 
+### Terminal Admin Interface
+
+Run the interactive TUI against the local SQLite database:
+
+```bash
+./target/release/tspan-server --database data.db tui
+
+# Start on one client, use local time, and show 50 records per page
+./target/release/tspan-server --database data.db tui \
+  --client-id workstation \
+  --timezone America/New_York \
+  --page-size 50
+```
+
+The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
+
+| Key | Action |
+|-----|--------|
+| `1`–`5` / `Tab` | Switch views |
+| `↑` / `↓` or `j` / `k` | Move or scroll |
+| `[` / `]` | Change the client filter |
+| `r` | Refresh (data also refreshes every 10 seconds) |
+| `d` | Delete, discard, or revoke the selected item after confirmation |
+| `q` / `Ctrl-C` | Quit |
+
+This is a local admin tool: it accesses SQLite directly instead of calling the HTTP API. Run it on the server host (or wherever the database volume is mounted) with filesystem permission to read and update the database. SQLite WAL mode and the configured busy timeout allow it to run alongside the server.
+
 ## API Endpoints
 
 All `/api/*` endpoints require `Authorization: Bearer <token>`.
