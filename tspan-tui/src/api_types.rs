@@ -108,6 +108,34 @@ pub struct StreakStats {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct WeekdayWeekendStats {
+    pub weekday_total_seconds: i64,
+    pub weekday_times: i64,
+    pub weekday_mean_seconds: i64,
+    pub weekend_total_seconds: i64,
+    pub weekend_times: i64,
+    pub weekend_mean_seconds: i64,
+    pub weekday_total_hr: String,
+    pub weekday_mean_hr: String,
+    pub weekend_total_hr: String,
+    pub weekend_mean_hr: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MonthlyPoint {
+    pub year_month: String,
+    pub total_seconds: i64,
+    pub total_times: i64,
+    pub total_seconds_hr: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HourlyHeatmap {
+    pub grid: Vec<Vec<i64>>,
+    pub max_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct EndSessionResp {
     pub session_id: i64,
     pub duration_seconds: i64,

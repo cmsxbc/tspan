@@ -1,11 +1,11 @@
 use crate::api_types::{
     human_readable_time, AliasStat, ClientStat, CommandStat, CreateTokenReq, CreateTokenResp,
-    EndSessionResp, OrphanedSession, RecordPageItem, RecordsPageResp, SessionDistribution, Stats,
-    StreakStats,
+    EndSessionResp, HourlyHeatmap, MonthlyPoint, OrphanedSession, RecordPageItem, RecordsPageResp,
+    SessionDistribution, Stats, StreakStats, WeekdayWeekendStats,
 };
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use chrono_tz::Tz;
 use crossterm::{
     cursor::Show,
@@ -21,11 +21,14 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{
+        Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, Table, TableState, Tabs, Wrap,
+    },
     Frame, Terminal,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
+    collections::HashMap,
     fs::{File, OpenOptions},
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -53,29 +56,65 @@ enum View {
     Records,
     Active,
     Tokens,
+    Analytics,
 }
 
 impl View {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Overview,
         Self::Breakdown,
         Self::Records,
         Self::Active,
         Self::Tokens,
+        Self::Analytics,
     ];
 
     fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Breakdown => "Breakdown",
+            Self::Breakdown => "Stats",
             Self::Records => "Records",
             Self::Active => "Active",
             Self::Tokens => "Tokens",
+            Self::Analytics => "Graphs",
         }
     }
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|view| *view == self).unwrap_or(0)
+    }
+
+    fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    fn previous(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnalyticsKind {
+    Calendar,
+    Monthly,
+    Hourly,
+    Patterns,
+}
+
+impl AnalyticsKind {
+    const ALL: [Self; 4] = [Self::Calendar, Self::Monthly, Self::Hourly, Self::Patterns];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Calendar => "Calendar",
+            Self::Monthly => "Monthly trend",
+            Self::Hourly => "Hourly heatmap",
+            Self::Patterns => "Patterns",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|kind| *kind == self).unwrap_or(0)
     }
 
     fn next(self) -> Self {
@@ -132,6 +171,13 @@ struct OverviewData {
     by_client: Vec<ClientStat>,
     by_alias: Vec<AliasStat>,
     by_command: Vec<CommandStat>,
+}
+
+struct AnalyticsData {
+    daily: Vec<(String, i64)>,
+    monthly: Vec<MonthlyPoint>,
+    hourly: HourlyHeatmap,
+    weekday_weekend: WeekdayWeekendStats,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,6 +322,23 @@ impl ApiClient {
                 "stats/by-command",
                 &command_filter,
                 "load command statistics",
+            )?,
+        })
+    }
+
+    fn analytics(&self, client_id: &str, timezone: Tz) -> Result<AnalyticsData> {
+        let filters = [
+            ("client_id", client_id.to_string()),
+            ("tz", timezone.to_string()),
+        ];
+        Ok(AnalyticsData {
+            daily: self.get_json("daily-data", &filters, "load activity calendar")?,
+            monthly: self.get_json("stats/monthly-trend", &filters, "load monthly trend")?,
+            hourly: self.get_json("stats/hourly-heatmap", &filters, "load hourly heatmap")?,
+            weekday_weekend: self.get_json(
+                "stats/weekday-weekend",
+                &filters,
+                "load weekday and weekend statistics",
             )?,
         })
     }
@@ -503,10 +566,13 @@ struct App {
     timezone: Tz,
     view: View,
     breakdown_kind: BreakdownKind,
+    analytics_kind: AnalyticsKind,
+    calendar_offset_weeks: usize,
     breakdown_offset: usize,
     client_ids: Vec<String>,
     client_index: usize,
     overview: Option<OverviewData>,
+    analytics: Option<AnalyticsData>,
     records: Vec<RecordPageItem>,
     records_total: i64,
     records_page: i64,
@@ -545,10 +611,13 @@ impl App {
             timezone,
             view: View::Overview,
             breakdown_kind: BreakdownKind::Clients,
+            analytics_kind: AnalyticsKind::Calendar,
+            calendar_offset_weeks: 0,
             breakdown_offset: 0,
             client_ids: vec![GLOBAL_CLIENT.to_string()],
             client_index: 0,
             overview: None,
+            analytics: None,
             records: Vec::new(),
             records_total: 0,
             records_page: 1,
@@ -614,6 +683,7 @@ impl App {
         let old_token_selection = self.tokens_state.selected().unwrap_or(0);
 
         let overview = self.api.overview(&client_id, self.timezone)?;
+        let analytics = self.api.analytics(&client_id, self.timezone)?;
         let mut record_page = self
             .api
             .records(&client_id, self.records_page, self.page_size)?;
@@ -636,6 +706,7 @@ impl App {
         }
 
         self.overview = Some(overview);
+        self.analytics = Some(analytics);
         self.records = record_page.records;
         self.records_total = record_page.total;
         self.active = active;
@@ -677,6 +748,7 @@ impl App {
         }
         self.records_page = 1;
         self.breakdown_offset = 0;
+        self.calendar_offset_weeks = 0;
         if let Err(error) = self.refresh_all() {
             self.set_error(error);
         } else {
@@ -730,6 +802,7 @@ impl App {
             KeyCode::Char('3') => self.view = View::Records,
             KeyCode::Char('4') => self.view = View::Active,
             KeyCode::Char('5') => self.view = View::Tokens,
+            KeyCode::Char('6') => self.view = View::Analytics,
             KeyCode::Char('r') => match self.refresh_all() {
                 Ok(()) => self.set_notice("Data refreshed"),
                 Err(error) => self.set_error(error),
@@ -743,6 +816,33 @@ impl App {
     fn handle_view_key(&mut self, code: KeyCode) {
         match self.view {
             View::Overview => {}
+            View::Analytics => match code {
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.analytics_kind = self.analytics_kind.previous();
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.analytics_kind = self.analytics_kind.next();
+                }
+                KeyCode::Down | KeyCode::PageDown | KeyCode::Char('j')
+                    if self.analytics_kind == AnalyticsKind::Calendar =>
+                {
+                    self.calendar_offset_weeks = self
+                        .calendar_offset_weeks
+                        .saturating_add(26)
+                        .min(self.calendar_history_weeks());
+                }
+                KeyCode::Up | KeyCode::PageUp | KeyCode::Char('k')
+                    if self.analytics_kind == AnalyticsKind::Calendar =>
+                {
+                    self.calendar_offset_weeks = self.calendar_offset_weeks.saturating_sub(26);
+                }
+                KeyCode::Home | KeyCode::Char('g')
+                    if self.analytics_kind == AnalyticsKind::Calendar =>
+                {
+                    self.calendar_offset_weeks = 0;
+                }
+                _ => {}
+            },
             View::Breakdown => match code {
                 KeyCode::Left | KeyCode::Char('h') => {
                     self.breakdown_kind = self.breakdown_kind.previous();
@@ -960,6 +1060,21 @@ impl App {
         }
     }
 
+    fn calendar_history_weeks(&self) -> usize {
+        let today = Utc::now().with_timezone(&self.timezone).date_naive();
+        self.analytics
+            .as_ref()
+            .and_then(|analytics| {
+                analytics
+                    .daily
+                    .iter()
+                    .filter_map(|(day, _)| NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+                    .min()
+            })
+            .map(|earliest| today.signed_duration_since(earliest).num_weeks().max(0) as usize)
+            .unwrap_or(0)
+    }
+
     fn selected_record(&self) -> Option<&RecordPageItem> {
         self.records_state
             .selected()
@@ -1079,6 +1194,7 @@ impl App {
             View::Records => self.draw_records(frame, chunks[1]),
             View::Active => self.draw_active(frame, chunks[1]),
             View::Tokens => self.draw_tokens(frame, chunks[1]),
+            View::Analytics => self.draw_analytics(frame, chunks[1]),
         }
         self.draw_footer(frame, chunks[2]);
         self.draw_overlay(frame, area);
@@ -1139,6 +1255,7 @@ impl App {
             View::Tokens => {
                 "↑/↓ select  n new  d revoke  [ ] client  r refresh  Tab view  ? help  q quit"
             }
+            View::Analytics => "←/→ graph  j/k history  [/] client  r refresh  ? help  q quit",
         };
         let notice = self.notice.as_ref();
         let notice_style = match notice {
@@ -1390,6 +1507,288 @@ impl App {
         }
     }
 
+    fn draw_analytics(&self, frame: &mut Frame, area: Rect) {
+        let Some(data) = self.analytics.as_ref() else {
+            frame.render_widget(Paragraph::new("No analytics loaded"), area);
+            return;
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(5)])
+            .split(area);
+        let tabs = Tabs::new(
+            AnalyticsKind::ALL
+                .iter()
+                .map(|kind| Line::from(format!(" {} ", kind.title())))
+                .collect::<Vec<_>>(),
+        )
+        .select(self.analytics_kind.index())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Dashboard graphs "),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider("│");
+        frame.render_widget(tabs, chunks[0]);
+
+        match self.analytics_kind {
+            AnalyticsKind::Calendar => self.draw_activity_calendar(frame, chunks[1], data),
+            AnalyticsKind::Monthly => self.draw_monthly_trend(frame, chunks[1], data),
+            AnalyticsKind::Hourly => self.draw_hourly_heatmap(frame, chunks[1], data),
+            AnalyticsKind::Patterns => self.draw_activity_patterns(frame, chunks[1], data),
+        }
+    }
+
+    fn draw_activity_calendar(&self, frame: &mut Frame, area: Rect, data: &AnalyticsData) {
+        let today = Utc::now().with_timezone(&self.timezone).date_naive();
+        let cell_width = 2_u16;
+        let weeks = usize::from((area.width.saturating_sub(8) / cell_width).clamp(4, 53));
+        let this_monday = today
+            - ChronoDuration::days(i64::from(today.weekday().num_days_from_monday()))
+            - ChronoDuration::weeks(self.calendar_offset_weeks as i64);
+        let start = this_monday - ChronoDuration::days(((weeks - 1) * 7) as i64);
+        let end = start + ChronoDuration::days((weeks * 7 - 1) as i64);
+        let values = data
+            .daily
+            .iter()
+            .map(|(day, seconds)| (day.as_str(), *seconds))
+            .collect::<HashMap<_, _>>();
+        let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        let mut lines = Vec::with_capacity(7);
+        for (weekday, name) in day_names.iter().enumerate() {
+            let mut spans = vec![Span::styled(
+                format!("{name} "),
+                Style::default().fg(Color::Gray),
+            )];
+            for week in 0..weeks {
+                let date = start + ChronoDuration::days((week * 7 + weekday) as i64);
+                if date > today {
+                    spans.push(Span::raw("  "));
+                    continue;
+                }
+                let key = date.format("%Y-%m-%d").to_string();
+                let seconds = values.get(key.as_str()).copied().unwrap_or(0);
+                spans.push(Span::styled(
+                    "██",
+                    Style::default().fg(calendar_activity_color(seconds)),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+        let title = format!(
+            " Activity · {} → {} · 0 | <30m | <60m | ≥60m ",
+            start.format("%Y-%m-%d"),
+            end.min(today).format("%Y-%m-%d")
+        );
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
+            area,
+        );
+    }
+
+    fn draw_monthly_trend(&self, frame: &mut Frame, area: Rect, data: &AnalyticsData) {
+        if data.monthly.is_empty() {
+            frame.render_widget(
+                Paragraph::new("No monthly activity data")
+                    .alignment(Alignment::Center)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Monthly trend "),
+                    ),
+                area,
+            );
+            return;
+        }
+        let capacity = usize::from(area.width.saturating_sub(2)).max(1);
+        let visible = &data.monthly[data.monthly.len().saturating_sub(capacity)..];
+        let durations = visible
+            .iter()
+            .map(|point| point.total_seconds.max(0) as u64)
+            .collect::<Vec<_>>();
+        let sessions = visible
+            .iter()
+            .map(|point| point.total_times.max(0) as u64)
+            .collect::<Vec<_>>();
+        let first = &visible[0];
+        let latest = &visible[visible.len() - 1];
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        frame.render_widget(
+            Sparkline::default()
+                .data(&durations)
+                .style(Style::default().fg(Color::Cyan))
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    " Duration · {} → {} · latest {} ",
+                    first.year_month, latest.year_month, latest.total_seconds_hr
+                ))),
+            rows[0],
+        );
+        frame.render_widget(
+            Sparkline::default()
+                .data(&sessions)
+                .style(Style::default().fg(Color::Green))
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    " Sessions · {} → {} · latest {} ",
+                    first.year_month, latest.year_month, latest.total_times
+                ))),
+            rows[1],
+        );
+    }
+
+    fn draw_hourly_heatmap(&self, frame: &mut Frame, area: Rect, data: &AnalyticsData) {
+        let cell_width = if area.width >= 56 { 2 } else { 1 };
+        let mut lines = Vec::with_capacity(8);
+        if cell_width == 2 {
+            let mut header = vec![Span::raw("    ")];
+            for hour in 0..24 {
+                header.push(Span::styled(
+                    if hour % 4 == 0 {
+                        format!("{hour:02}")
+                    } else {
+                        "  ".to_string()
+                    },
+                    Style::default().fg(Color::Gray),
+                ));
+            }
+            lines.push(Line::from(header));
+        }
+        let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        for (day, name) in day_names.iter().enumerate() {
+            let mut spans = vec![Span::styled(
+                format!("{name} "),
+                Style::default().fg(Color::Gray),
+            )];
+            for hour in 0..24 {
+                let seconds = data
+                    .hourly
+                    .grid
+                    .get(day)
+                    .and_then(|row| row.get(hour))
+                    .copied()
+                    .unwrap_or(0);
+                spans.push(Span::styled(
+                    if cell_width == 2 { "██" } else { "█" },
+                    Style::default().fg(relative_heat_color(seconds, data.hourly.max_seconds)),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Hourly heatmap · columns 00–23 · dark low → red high "),
+            ),
+            area,
+        );
+    }
+
+    fn draw_activity_patterns(&self, frame: &mut Frame, area: Rect, data: &AnalyticsData) {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        let weekday = &data.weekday_weekend;
+        let metric_width = usize::from(panes[0].width.saturating_sub(23)).max(1);
+        let mut weekday_lines = Vec::with_capacity(6);
+        let total_max = weekday
+            .weekday_total_seconds
+            .max(weekday.weekend_total_seconds);
+        weekday_lines.push(metric_bar_line(
+            "Time WD",
+            weekday.weekday_total_seconds,
+            total_max,
+            &weekday.weekday_total_hr,
+            Color::Cyan,
+            metric_width,
+        ));
+        weekday_lines.push(metric_bar_line(
+            "Time WE",
+            weekday.weekend_total_seconds,
+            total_max,
+            &weekday.weekend_total_hr,
+            Color::Green,
+            metric_width,
+        ));
+        let times_max = weekday.weekday_times.max(weekday.weekend_times);
+        weekday_lines.push(metric_bar_line(
+            "Sess WD",
+            weekday.weekday_times,
+            times_max,
+            &weekday.weekday_times.to_string(),
+            Color::Cyan,
+            metric_width,
+        ));
+        weekday_lines.push(metric_bar_line(
+            "Sess WE",
+            weekday.weekend_times,
+            times_max,
+            &weekday.weekend_times.to_string(),
+            Color::Green,
+            metric_width,
+        ));
+        let mean_max = weekday
+            .weekday_mean_seconds
+            .max(weekday.weekend_mean_seconds);
+        weekday_lines.push(metric_bar_line(
+            "Mean WD",
+            weekday.weekday_mean_seconds,
+            mean_max,
+            &weekday.weekday_mean_hr,
+            Color::Cyan,
+            metric_width,
+        ));
+        weekday_lines.push(metric_bar_line(
+            "Mean WE",
+            weekday.weekend_mean_seconds,
+            mean_max,
+            &weekday.weekend_mean_hr,
+            Color::Green,
+            metric_width,
+        ));
+        frame.render_widget(
+            Paragraph::new(weekday_lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Weekday vs weekend "),
+            ),
+            panes[0],
+        );
+
+        let distribution = self.overview.as_ref().map(|value| &value.distribution);
+        let buckets = distribution
+            .map(|value| value.buckets.as_slice())
+            .unwrap_or(&[]);
+        let count_max = buckets.iter().map(|bucket| bucket.count).max().unwrap_or(0);
+        let bucket_width = usize::from(panes[1].width.saturating_sub(21)).max(1);
+        let bucket_lines = buckets.iter().map(|bucket| {
+            metric_bar_line(
+                &bucket.label,
+                bucket.count,
+                count_max,
+                &format!("{} {:.0}%", bucket.count, bucket.pct),
+                Color::Magenta,
+                bucket_width,
+            )
+        });
+        let title = distribution
+            .map(|value| format!(" Distribution · median {} ", value.median_seconds_hr))
+            .unwrap_or_else(|| " Session distribution ".to_string());
+        frame.render_widget(
+            Paragraph::new(bucket_lines.collect::<Vec<_>>())
+                .block(Block::default().borders(Borders::ALL).title(title)),
+            panes[1],
+        );
+    }
+
     fn draw_records(&mut self, frame: &mut Frame, area: Rect) {
         let rows = self.records.iter().map(|record| {
             Row::new(vec![
@@ -1517,7 +1916,7 @@ impl App {
                 frame.render_widget(Clear, popup);
                 let help = vec![
                     Line::from("Navigation"),
-                    Line::from("  1–5 / Tab   switch views"),
+                    Line::from("  1–6 / Tab   switch views"),
                     Line::from("  ↑/↓ / j/k   select or scroll"),
                     Line::from("  [ / ]       change client filter"),
                     Line::from("  r           refresh (automatic every 10s)"),
@@ -1527,6 +1926,8 @@ impl App {
                     Line::from("  Records     ←/→ page · d delete"),
                     Line::from("  Active      e end · d discard"),
                     Line::from("  Tokens      n new · d revoke"),
+                    Line::from("  Analytics   ←/→ chart"),
+                    Line::from("              j/k calendar history"),
                     Line::from("Esc / Enter / ? closes this help."),
                 ];
                 frame.render_widget(
@@ -1662,6 +2063,50 @@ impl App {
             }
         }
     }
+}
+
+fn calendar_activity_color(seconds: i64) -> Color {
+    match seconds {
+        value if value <= 0 => Color::DarkGray,
+        1..=1_799 => Color::Green,
+        1_800..=3_600 => Color::Yellow,
+        _ => Color::Red,
+    }
+}
+
+fn relative_heat_color(seconds: i64, max_seconds: i64) -> Color {
+    if seconds <= 0 || max_seconds <= 0 {
+        return Color::DarkGray;
+    }
+    let ratio = seconds as f64 / max_seconds as f64;
+    if ratio < 0.33 {
+        Color::Green
+    } else if ratio < 0.66 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
+}
+
+fn metric_bar_line(
+    label: &str,
+    value: i64,
+    max_value: i64,
+    display: &str,
+    color: Color,
+    width: usize,
+) -> Line<'static> {
+    let filled = if value <= 0 || max_value <= 0 {
+        0
+    } else {
+        (((value as f64 / max_value as f64) * width as f64).round() as usize).clamp(1, width)
+    };
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(width - filled));
+    Line::from(vec![
+        Span::styled(format!("{label:<8} "), Style::default().fg(Color::Gray)),
+        Span::styled(bar, Style::default().fg(color)),
+        Span::raw(format!(" {display}")),
+    ])
 }
 
 struct TerminalGuard;
@@ -1998,7 +2443,13 @@ mod tests {
             ("GET", "/api/sessions/orphaned") => (200, active_payload(state)),
             ("GET", "/api/stats") => (200, stats_payload(state.fixture)),
             ("GET", "/api/stats/streaks") => (200, streaks_payload()),
-            ("GET", "/api/stats/session-distribution") => (200, distribution_payload()),
+            ("GET", "/api/stats/session-distribution") => {
+                (200, distribution_payload(state.fixture))
+            }
+            ("GET", "/api/daily-data") => (200, daily_payload(state.fixture)),
+            ("GET", "/api/stats/monthly-trend") => (200, monthly_payload(state.fixture)),
+            ("GET", "/api/stats/hourly-heatmap") => (200, hourly_payload(state.fixture)),
+            ("GET", "/api/stats/weekday-weekend") => (200, weekday_weekend_payload(state.fixture)),
             ("GET", "/api/stats/by-client")
             | ("GET", "/api/stats/by-alias")
             | ("GET", "/api/stats/by-command") => (200, "[]".to_string()),
@@ -2200,18 +2651,101 @@ mod tests {
         .to_string()
     }
 
-    fn distribution_payload() -> String {
+    fn distribution_payload(fixture: Fixture) -> String {
+        if matches!(fixture, Fixture::Workstation) {
+            json!({
+                "max_seconds": 5_400,
+                "min_seconds": 600,
+                "median_seconds": 1_800,
+                "mean_seconds": 2_400,
+                "total_sessions": 6,
+                "max_seconds_hr": "01 h 30 m 00 s",
+                "min_seconds_hr": "10 m 00 s",
+                "median_seconds_hr": "30 m 00 s",
+                "mean_seconds_hr": "40 m 00 s",
+                "buckets": [
+                    { "label": "< 30m", "count": 2, "pct": 33.3 },
+                    { "label": "30-60m", "count": 3, "pct": 50.0 },
+                    { "label": "> 60m", "count": 1, "pct": 16.7 }
+                ]
+            })
+            .to_string()
+        } else {
+            json!({
+                "max_seconds": 0,
+                "min_seconds": 0,
+                "median_seconds": 0,
+                "mean_seconds": 0,
+                "total_sessions": 0,
+                "max_seconds_hr": "0 s",
+                "min_seconds_hr": "0 s",
+                "median_seconds_hr": "0 s",
+                "mean_seconds_hr": "0 s",
+                "buckets": []
+            })
+            .to_string()
+        }
+    }
+
+    fn daily_payload(fixture: Fixture) -> String {
+        if matches!(fixture, Fixture::Workstation) {
+            json!([
+                ["2024-01-01", 600],
+                ["2026-07-12", 900],
+                ["2026-07-13", 2_700],
+                ["2026-07-14", 5_400]
+            ])
+            .to_string()
+        } else {
+            "[]".to_string()
+        }
+    }
+
+    fn monthly_payload(fixture: Fixture) -> String {
+        if matches!(fixture, Fixture::Workstation) {
+            json!([
+                {
+                    "year_month": "2026-06",
+                    "total_seconds": 3_600,
+                    "total_times": 4,
+                    "total_seconds_hr": "01 h 00 s"
+                },
+                {
+                    "year_month": "2026-07",
+                    "total_seconds": 9_000,
+                    "total_times": 7,
+                    "total_seconds_hr": "02 h 30 m 00 s"
+                }
+            ])
+            .to_string()
+        } else {
+            "[]".to_string()
+        }
+    }
+
+    fn hourly_payload(fixture: Fixture) -> String {
+        let mut grid = vec![vec![0_i64; 24]; 7];
+        if matches!(fixture, Fixture::Workstation) {
+            grid[0][9] = 900;
+            grid[2][14] = 1_800;
+            grid[4][18] = 3_600;
+        }
+        json!({ "grid": grid, "max_seconds": 3_600 }).to_string()
+    }
+
+    fn weekday_weekend_payload(fixture: Fixture) -> String {
+        let active = matches!(fixture, Fixture::Workstation);
         json!({
-            "max_seconds": 0,
-            "min_seconds": 0,
-            "median_seconds": 0,
-            "mean_seconds": 0,
-            "total_sessions": 0,
-            "max_seconds_hr": "0 s",
-            "min_seconds_hr": "0 s",
-            "median_seconds_hr": "0 s",
-            "mean_seconds_hr": "0 s",
-            "buckets": []
+            "weekday_total_seconds": if active { 7_200 } else { 0 },
+            "weekday_times": if active { 6 } else { 0 },
+            "weekday_mean_seconds": if active { 1_200 } else { 0 },
+            "weekend_total_seconds": if active { 1_800 } else { 0 },
+            "weekend_times": if active { 2 } else { 0 },
+            "weekend_mean_seconds": if active { 900 } else { 0 },
+            "weekday_total_hr": if active { "02 h 00 s" } else { "0 s" },
+            "weekday_mean_hr": if active { "20 m 00 s" } else { "0 s" },
+            "weekend_total_hr": if active { "30 m 00 s" } else { "0 s" },
+            "weekend_mean_hr": if active { "15 m 00 s" } else { "0 s" }
         })
         .to_string()
     }
@@ -2241,6 +2775,11 @@ mod tests {
         assert_eq!(app.active.len(), 1);
         assert_eq!(app.tokens.len(), 1);
         assert!(app.client_ids.iter().any(|client| client == "other"));
+        let analytics = app.analytics.as_ref().unwrap();
+        assert_eq!(analytics.daily.len(), 4);
+        assert_eq!(analytics.monthly.len(), 2);
+        assert_eq!(analytics.hourly.grid.len(), 7);
+        assert_eq!(analytics.weekday_weekend.weekday_times, 6);
     }
 
     #[test]
@@ -2268,6 +2807,11 @@ mod tests {
             app.view = view;
             terminal.draw(|frame| app.draw(frame)).unwrap();
         }
+        app.view = View::Analytics;
+        for kind in AnalyticsKind::ALL {
+            app.analytics_kind = kind;
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+        }
         app.overlay = Some(Overlay::Help);
         terminal.draw(|frame| app.draw(frame)).unwrap();
         app.overlay = Some(Overlay::Confirm(AdminAction::DeleteRecord(1)));
@@ -2280,6 +2824,43 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         app.overlay = Some(Overlay::TokenCreated("tspan_test".to_string()));
         terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+
+    #[test]
+    fn populated_analytics_graphs_render() {
+        let server = TestServer::new(Fixture::Workstation);
+        let mut app = App::new(options(&server, "workstation")).unwrap();
+        app.view = View::Analytics;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        app.analytics_kind = AnalyticsKind::Calendar;
+        app.handle_view_key(KeyCode::Char('j'));
+        assert_eq!(app.calendar_offset_weeks, 26);
+        app.handle_view_key(KeyCode::Char('k'));
+        assert_eq!(app.calendar_offset_weeks, 0);
+
+        for kind in AnalyticsKind::ALL {
+            app.analytics_kind = kind;
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            let expected = match kind {
+                AnalyticsKind::Calendar => "Activity ·",
+                AnalyticsKind::Monthly => "Duration",
+                AnalyticsKind::Hourly => "Hourly heatmap",
+                AnalyticsKind::Patterns => "Weekday vs weekend",
+            };
+            assert!(
+                rendered.contains(expected),
+                "missing {expected} chart title"
+            );
+        }
     }
 
     #[test]

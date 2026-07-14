@@ -81,12 +81,13 @@ export TSPAN_TUI_PASSWORD='your-admin-password'
 
 The TUI accepts older `/api/records` responses that do not include `status`. It infers completed or active status from the record timestamps and displays a yellow `LEGACY API` compatibility warning so administrators know the server should be upgraded.
 
-The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
+The TUI provides summary and grouped statistics, paginated record browsing, active-session management, API token generation/revocation, and terminal-native versions of the web dashboard graphs. The Analytics view includes a responsive activity calendar, monthly duration/session sparklines, a 7×24 hourly heatmap, weekday/weekend comparison bars, and session-distribution bars. Press `?` for complete keyboard help. Common keys are:
 
 | Key | Action |
 |-----|--------|
-| `1`–`5` / `Tab` | Switch views |
+| `1`–`6` / `Tab` | Switch views |
 | `↑` / `↓` or `j` / `k` | Move or scroll |
+| `←` / `→` or `h` / `l` | Change analytics graph or breakdown table |
 | `[` / `]` | Change the client filter |
 | `r` | Refresh (data also refreshes every 10 seconds) |
 | `d` | Delete, discard, or revoke the selected item after confirmation |
