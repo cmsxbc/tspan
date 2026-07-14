@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, LocalResult, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,32 @@ pub fn resolve_tz(tz_name: Option<&str>) -> Tz {
     tz_name
         .and_then(|name| name.parse().ok())
         .unwrap_or(Tz::UTC)
+}
+
+/// Convert a Unix timestamp to a UTC datetime without panicking. Out-of-range
+/// timestamps (e.g. a corrupt record) fall back to the epoch rather than
+/// crashing the request thread.
+fn ts_to_utc(ts: i64) -> DateTime<Utc> {
+    DateTime::from_timestamp(ts, 0).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap())
+}
+
+/// Timestamp (seconds since epoch) for the start of `date` in `tz`, handling
+/// DST transitions without panicking. A nonexistent local midnight
+/// (spring-forward gap, e.g. America/Santiago) advances to the first valid
+/// wall-clock time that day; an ambiguous local midnight (fall-back) uses the
+/// earlier instant.
+fn local_date_start(date: NaiveDate, tz: &Tz) -> i64 {
+    for minute in 0..(24 * 60) {
+        let naive = date.and_hms_opt(minute / 60, minute % 60, 0).unwrap();
+        match tz.from_local_datetime(&naive) {
+            LocalResult::Single(dt) => return dt.timestamp(),
+            LocalResult::Ambiguous(earliest, _latest) => return earliest.timestamp(),
+            LocalResult::None => continue,
+        }
+    }
+    // No valid wall-clock time all day is impossible for real zones; fall back
+    // to interpreting midnight as UTC rather than panicking.
+    date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
 }
 
 pub fn human_readable_time(seconds: i64) -> String {
@@ -141,7 +167,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
         return Ok(Stats { total, past_n: vec![], interval });
     }
 
-    let earliest_utc = DateTime::from_timestamp(rows.first().unwrap().0, 0).unwrap();
+    let earliest_utc = ts_to_utc(rows.first().unwrap().0);
     let earliest_local = earliest_utc.with_timezone(tz);
     let earliest_date = earliest_local.date_naive();
 
@@ -153,7 +179,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
 
     let mut active_dates = HashSet::new();
     for (start_time, _) in &rows {
-        let dt = DateTime::from_timestamp(*start_time, 0).unwrap().with_timezone(tz);
+        let dt = ts_to_utc(*start_time).with_timezone(tz);
         active_dates.insert(dt.date_naive());
     }
     let active_days = active_dates.len() as i64;
@@ -208,7 +234,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
     let mut past_n = Vec::new();
     for (name, secs) in past_n_names {
         let cutoff_local = today_local - chrono::Duration::seconds(secs);
-        let cutoff = tz.from_local_datetime(&cutoff_local.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
+        let cutoff = local_date_start(cutoff_local, tz);
 
         let mut period_seconds = 0i64;
         let mut period_times = 0i64;
@@ -218,7 +244,7 @@ pub fn compute_stats(conn: &mut Connection, client_id: &str, alias: &str, comman
             if *start_time > cutoff {
                 period_seconds += duration;
                 period_times += 1;
-                let dt = DateTime::from_timestamp(*start_time, 0).unwrap().with_timezone(tz);
+                let dt = ts_to_utc(*start_time).with_timezone(tz);
                 period_dates.insert(dt.date_naive());
             }
         }
@@ -473,7 +499,7 @@ pub fn get_daily_data(conn: &mut Connection, client_id: &str, alias: &str, comma
 
     let mut day_map: HashMap<NaiveDate, i64> = HashMap::new();
     for (start_time, duration) in rows {
-        let utc = DateTime::from_timestamp(start_time, 0).unwrap_or_else(|| Utc::now());
+        let utc = ts_to_utc(start_time);
         let local = utc.with_timezone(tz);
         let day = local.date_naive();
         *day_map.entry(day).or_insert(0) += duration.max(0);
@@ -648,7 +674,7 @@ pub fn compute_weekday_weekend_stats(
     let mut weekend_total = 0i64;
     let mut weekend_times = 0i64;
     for (start_time, duration) in rows {
-        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let utc = ts_to_utc(start_time);
         let local = utc.with_timezone(tz);
         let is_weekend = matches!(local.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
         if is_weekend {
@@ -722,12 +748,7 @@ pub fn compute_streaks(
 
     let mut days: Vec<NaiveDate> = starts
         .into_iter()
-        .map(|ts| {
-            DateTime::from_timestamp(ts, 0)
-                .unwrap()
-                .with_timezone(tz)
-                .date_naive()
-        })
+        .map(|ts| ts_to_utc(ts).with_timezone(tz).date_naive())
         .collect();
     days.sort();
     days.dedup();
@@ -812,7 +833,7 @@ pub fn compute_monthly_trend(
 
     let mut month_map: HashMap<String, (i64, i64)> = HashMap::new();
     for (start_time, duration) in rows {
-        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let utc = ts_to_utc(start_time);
         let local = utc.with_timezone(tz);
         let ym = local.format("%Y-%m").to_string();
         let entry = month_map.entry(ym).or_insert((0, 0));
@@ -876,7 +897,7 @@ pub fn compute_hourly_heatmap(
     let mut grid = vec![vec![0i64; 24]; 7];
     let mut max_seconds = 0i64;
     for (start_time, duration) in rows {
-        let utc = DateTime::from_timestamp(start_time, 0).unwrap();
+        let utc = ts_to_utc(start_time);
         let local = utc.with_timezone(tz);
         let dow = local.weekday().num_days_from_monday() as usize;
         let hour = local.hour() as usize;
@@ -907,6 +928,49 @@ mod tests {
             "UPDATE records SET end_time = start_time + ?1, duration_seconds = ?1, status = 'completed' WHERE id = ?2",
             params![duration, id],
         ).unwrap();
+    }
+
+    #[test]
+    fn local_date_start_survives_dst_gap() {
+        // Chile springs forward at midnight: 2024-09-08 00:00 local does not exist.
+        // This is the case that used to panic via from_local_datetime().unwrap().
+        let tz: Tz = "America/Santiago".parse().unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 9, 8).unwrap();
+        let ts = local_date_start(date, &tz);
+        let resolved = ts_to_utc(ts).with_timezone(&tz);
+        assert_eq!(resolved.date_naive(), date);
+        // Midnight is skipped; the first valid wall-clock time is 01:00.
+        assert_eq!(resolved.hour(), 1);
+        assert_eq!(resolved.minute(), 0);
+    }
+
+    #[test]
+    fn local_date_start_normal_day_is_midnight() {
+        let tz: Tz = "America/New_York".parse().unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let resolved = ts_to_utc(local_date_start(date, &tz)).with_timezone(&tz);
+        assert_eq!(resolved.date_naive(), date);
+        assert_eq!(resolved.hour(), 0);
+        assert_eq!(resolved.minute(), 0);
+    }
+
+    #[test]
+    fn ts_to_utc_handles_out_of_range_without_panicking() {
+        // Far outside chrono's representable range; must fall back, not panic.
+        assert_eq!(ts_to_utc(i64::MAX), DateTime::from_timestamp(0, 0).unwrap());
+        assert_eq!(ts_to_utc(i64::MIN), DateTime::from_timestamp(0, 0).unwrap());
+    }
+
+    #[test]
+    fn compute_stats_does_not_panic_in_dst_gap_timezone() {
+        let mut conn = setup();
+        insert_completed(&mut conn, "c1", "vim a", 60);
+        insert_completed(&mut conn, "c1", "vim b", 120);
+        let tz: Tz = "America/Santiago".parse().unwrap();
+        // Exercises the past-N cutoff path (local_date_start) across many periods.
+        let stats = compute_stats(&mut conn, "c1", "", "", &tz).unwrap();
+        assert_eq!(stats.total.total_seconds, 180);
+        assert!(!stats.past_n.is_empty());
     }
 
     #[test]
