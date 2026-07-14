@@ -28,7 +28,7 @@ use ratatui::{
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs::{File, OpenOptions},
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -358,8 +358,13 @@ impl ApiClient {
         self.get_json("clients", &[], "load clients")
     }
 
-    fn aliases(&self) -> Result<Vec<String>> {
-        self.get_json("aliases", &[], "load aliases")
+    fn aliases_of(&self, client_id: &str) -> Result<Vec<String>> {
+        let stats: Vec<AliasStat> = self.get_json(
+            "stats/by-alias",
+            &[("client_id", client_id.to_string())],
+            "load aliases",
+        )?;
+        Ok(stats.into_iter().map(|stat| stat.alias).collect())
     }
 
     fn records(
@@ -591,6 +596,7 @@ struct App {
     analytics_kind: AnalyticsKind,
     calendar_offset_weeks: usize,
     breakdown_offset: usize,
+    aliases_by_client: BTreeMap<String, Vec<String>>,
     client_ids: Vec<String>,
     client_index: usize,
     aliases: Vec<String>,
@@ -639,6 +645,7 @@ impl App {
             analytics_kind: AnalyticsKind::Calendar,
             calendar_offset_weeks: 0,
             breakdown_offset: 0,
+            aliases_by_client: BTreeMap::new(),
             client_ids: vec![GLOBAL_CLIENT.to_string()],
             client_index: 0,
             aliases: vec![String::new()],
@@ -660,8 +667,7 @@ impl App {
             should_quit: false,
             last_refresh: Instant::now(),
         };
-        app.refresh_client_ids(Some(&initial_client_id))?;
-        app.refresh_aliases(Some(&initial_alias))?;
+        app.refresh_filters(Some(&initial_client_id), Some(&initial_alias))?;
         app.refresh_all()?;
         Ok(app)
     }
@@ -696,53 +702,98 @@ impl App {
         }
     }
 
-    fn refresh_client_ids(&mut self, preferred: Option<&str>) -> Result<()> {
-        let existing = preferred
+    /// Rebuilds both filter lists so that every selectable combination has data behind it: the
+    /// alias list only holds aliases recorded for the selected client, and the client list only
+    /// holds clients that recorded the selected alias. A client that exists only as an API token,
+    /// with no records yet, is left out entirely. The current selection is always kept, so a client
+    /// or alias asked for on the command line stays visible even when it has no records.
+    fn refresh_filters(
+        &mut self,
+        preferred_client: Option<&str>,
+        preferred_alias: Option<&str>,
+    ) -> Result<()> {
+        let client = preferred_client
             .map(str::to_owned)
             .unwrap_or_else(|| self.current_client().to_string());
-        let mut clients = self.api.clients()?;
-        clients.extend(self.api.tokens()?.into_iter().map(|token| token.client_id));
-        clients.sort();
-        clients.dedup();
+        let alias = preferred_alias
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.current_alias().to_string());
+
+        let mut known_clients = self.api.clients()?;
+        known_clients.sort();
+        known_clients.dedup();
+
+        self.aliases_by_client = known_clients
+            .iter()
+            .map(|client| {
+                let mut aliases = self.api.aliases_of(client)?;
+                aliases.retain(|alias| !alias.is_empty());
+                aliases.sort();
+                aliases.dedup();
+                Ok((client.clone(), aliases))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+
+        let selectable: Vec<String> = known_clients
+            .into_iter()
+            .filter(|candidate| self.client_has_alias(candidate, &alias))
+            .collect();
         self.client_ids = vec![GLOBAL_CLIENT.to_string()];
-        self.client_ids.extend(clients);
-        if existing != GLOBAL_CLIENT && !self.client_ids.contains(&existing) {
-            self.client_ids.push(existing.clone());
+        self.client_ids.extend(selectable);
+        if client != GLOBAL_CLIENT && !self.client_ids.contains(&client) {
+            self.client_ids.push(client.clone());
             self.client_ids[1..].sort();
         }
         self.client_index = self
             .client_ids
             .iter()
-            .position(|client| client == &existing)
+            .position(|candidate| candidate == &client)
             .unwrap_or(0);
-        Ok(())
-    }
 
-    fn refresh_aliases(&mut self, preferred: Option<&str>) -> Result<()> {
-        let existing = preferred
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.current_alias().to_string());
-        let mut aliases = self.api.aliases()?;
-        aliases.retain(|alias| !alias.is_empty());
-        aliases.sort();
-        aliases.dedup();
+        let selectable = self.aliases_of_client(&client);
         self.aliases = vec![String::new()];
-        self.aliases.extend(aliases);
-        if !existing.is_empty() && !self.aliases.contains(&existing) {
-            self.aliases.push(existing.clone());
+        self.aliases.extend(selectable);
+        if !alias.is_empty() && !self.aliases.contains(&alias) {
+            self.aliases.push(alias.clone());
             self.aliases[1..].sort();
         }
         self.alias_index = self
             .aliases
             .iter()
-            .position(|alias| alias == &existing)
+            .position(|candidate| candidate == &alias)
             .unwrap_or(0);
         Ok(())
     }
 
+    fn client_has_alias(&self, client: &str, alias: &str) -> bool {
+        alias.is_empty()
+            || self
+                .aliases_by_client
+                .get(client)
+                .is_some_and(|aliases| aliases.iter().any(|candidate| candidate == alias))
+    }
+
+    fn aliases_of_client(&self, client: &str) -> Vec<String> {
+        if client == GLOBAL_CLIENT {
+            let mut aliases: Vec<String> = self
+                .aliases_by_client
+                .values()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            aliases.sort();
+            aliases.dedup();
+            aliases
+        } else {
+            self.aliases_by_client
+                .get(client)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
     fn refresh_all(&mut self) -> Result<()> {
-        self.refresh_client_ids(None)?;
-        self.refresh_aliases(None)?;
+        self.refresh_filters(None, None)?;
         let client_id = self.current_client().to_string();
         let alias = self.current_alias().to_string();
         let old_record_selection = self.records_state.selected().unwrap_or(0);
@@ -2541,7 +2592,6 @@ mod tests {
         let route = path.split('?').next().unwrap_or(path);
         match (method, route) {
             ("GET", "/api/clients") => (200, clients_payload(state.fixture)),
-            ("GET", "/api/aliases") => (200, aliases_payload(state.fixture)),
             ("GET", "/api/admin/tokens") => (200, tokens_payload(state)),
             ("GET", "/api/records") => (200, records_payload(state, path)),
             ("GET", "/api/sessions/orphaned") => (200, active_payload(state)),
@@ -2554,9 +2604,10 @@ mod tests {
             ("GET", "/api/stats/monthly-trend") => (200, monthly_payload(state.fixture)),
             ("GET", "/api/stats/hourly-heatmap") => (200, hourly_payload(state.fixture)),
             ("GET", "/api/stats/weekday-weekend") => (200, weekday_weekend_payload(state.fixture)),
-            ("GET", "/api/stats/by-client")
-            | ("GET", "/api/stats/by-alias")
-            | ("GET", "/api/stats/by-command") => (200, "[]".to_string()),
+            ("GET", "/api/stats/by-alias") => (200, alias_stats_payload(state.fixture, path)),
+            ("GET", "/api/stats/by-client") | ("GET", "/api/stats/by-command") => {
+                (200, "[]".to_string())
+            }
             ("DELETE", "/api/admin/records/1") => {
                 state.record_deleted.store(true, Ordering::Relaxed);
                 (200, "{}".to_string())
@@ -2591,13 +2642,73 @@ mod tests {
         .to_string()
     }
 
-    fn aliases_payload(fixture: Fixture) -> String {
+    /// The (client, alias) pairs each fixture has completed records for.
+    fn fixture_aliases(fixture: Fixture) -> Vec<(&'static str, &'static str)> {
         match fixture {
-            Fixture::Empty | Fixture::Actions => json!([]),
-            Fixture::Workstation => json!(["development", "meetings"]),
-            Fixture::Legacy => json!(["网络中断: 192.168.71.1"]),
+            Fixture::Empty | Fixture::Actions => Vec::new(),
+            Fixture::Workstation => vec![("workstation", "development"), ("other", "meetings")],
+            Fixture::Legacy => vec![("network", "网络中断: 192.168.71.1")],
         }
-        .to_string()
+    }
+
+    fn alias_stats_payload(fixture: Fixture, path: &str) -> String {
+        let client = query_value(path, "client_id").unwrap_or_default();
+        let aliases = fixture_aliases(fixture)
+            .into_iter()
+            .filter(|(owner, _)| client.is_empty() || client == GLOBAL_CLIENT || *owner == client)
+            .map(|(_, alias)| {
+                json!({
+                    "alias": alias,
+                    "total_seconds": 120,
+                    "total_times": 1,
+                    "mean_seconds": 120,
+                    "total_seconds_hr": "2 m 00 s",
+                    "mean_seconds_hr": "2 m 00 s"
+                })
+            })
+            .collect::<Vec<_>>();
+        json!(aliases).to_string()
+    }
+
+    fn query_value(path: &str, key: &str) -> Option<String> {
+        let raw = path
+            .split('?')
+            .nth(1)?
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{key}=")))?;
+        Some(percent_decode(raw))
+    }
+
+    fn percent_decode(raw: &str) -> String {
+        let bytes = raw.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'%' if index + 2 < bytes.len() => {
+                    let hex = String::from_utf8_lossy(&bytes[index + 1..index + 3]);
+                    match u8::from_str_radix(&hex, 16) {
+                        Ok(byte) => {
+                            decoded.push(byte);
+                            index += 3;
+                        }
+                        Err(_) => {
+                            decoded.push(bytes[index]);
+                            index += 1;
+                        }
+                    }
+                }
+                b'+' => {
+                    decoded.push(b' ');
+                    index += 1;
+                }
+                byte => {
+                    decoded.push(byte);
+                    index += 1;
+                }
+            }
+        }
+        String::from_utf8_lossy(&decoded).into_owned()
     }
 
     fn tokens_payload(state: &MockState) -> String {
@@ -2615,6 +2726,12 @@ mod tests {
                     "client_id": "other",
                     "description": null,
                     "created_at": 1_700_000_000
+                },
+                {
+                    "token": "tspan_unused",
+                    "client_id": "unused",
+                    "description": "token issued, never used",
+                    "created_at": 1_700_000_000
                 }
             ]),
             Fixture::Legacy => json!([]),
@@ -2630,19 +2747,32 @@ mod tests {
     }
 
     fn records_payload(state: &MockState, path: &str) -> String {
+        let client = query_value(path, "client_id").unwrap_or_default();
+        let alias = query_value(path, "alias").unwrap_or_default();
         let mut records = Vec::new();
         match state.fixture {
-            Fixture::Workstation if !path.contains("alias=meetings") => records.push(json!({
-                "id": 1,
-                "client_id": "workstation",
-                "alias": "development",
-                "command": "cargo test",
-                "start_time": 1_700_000_000,
-                "end_time": 1_700_000_120,
-                "duration_seconds": 120,
-                "status": "completed"
-            })),
-            Fixture::Workstation => {}
+            Fixture::Workstation => {
+                records.push(json!({
+                    "id": 1,
+                    "client_id": "workstation",
+                    "alias": "development",
+                    "command": "cargo test",
+                    "start_time": 1_700_000_000,
+                    "end_time": 1_700_000_120,
+                    "duration_seconds": 120,
+                    "status": "completed"
+                }));
+                records.push(json!({
+                    "id": 2,
+                    "client_id": "other",
+                    "alias": "meetings",
+                    "command": "zoom",
+                    "start_time": 1_700_000_300,
+                    "end_time": 1_700_000_420,
+                    "duration_seconds": 120,
+                    "status": "completed"
+                }));
+            }
             Fixture::Legacy => records.push(json!({
                 "id": 1083,
                 "client_id": "network",
@@ -2680,6 +2810,12 @@ mod tests {
             }
             Fixture::Empty => {}
         }
+        records.retain(|record| {
+            let record_client = record["client_id"].as_str().unwrap_or_default();
+            let record_alias = record["alias"].as_str().unwrap_or_default();
+            (client.is_empty() || client == GLOBAL_CLIENT || record_client == client)
+                && (alias.is_empty() || record_alias == alias)
+        });
         json!({
             "total": records.len(),
             "page": 1,
@@ -2928,12 +3064,78 @@ mod tests {
         drop(requests);
 
         app.cycle_alias(true);
-        assert_eq!(app.current_alias(), "meetings");
-        assert!(app.records.is_empty());
-        assert!(app.active.is_empty());
+        assert_eq!(app.current_alias(), "");
+    }
+
+    #[test]
+    fn alias_cycle_skips_aliases_without_data_for_the_selected_client() {
+        let server = TestServer::new(Fixture::Workstation);
+        let mut app = App::new(options(&server, "workstation")).unwrap();
+
+        // "meetings" only has records under the "other" client.
+        assert_eq!(app.aliases, vec![String::new(), "development".to_string()]);
+
+        app.cycle_client(false);
+        assert_eq!(app.current_client(), "other");
+        assert_eq!(app.aliases, vec![String::new(), "meetings".to_string()]);
+    }
+
+    #[test]
+    fn clients_that_only_have_a_token_are_not_selectable() {
+        let server = TestServer::new(Fixture::Workstation);
+        let app = App::new(options(&server, GLOBAL_CLIENT)).unwrap();
+
+        // "unused" holds an API token but has never recorded anything.
+        assert!(app.tokens.iter().any(|token| token.client_id == "unused"));
+        assert_eq!(
+            app.client_ids,
+            vec![
+                GLOBAL_CLIENT.to_string(),
+                "other".to_string(),
+                "workstation".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn client_cycle_skips_clients_without_data_for_the_selected_alias() {
+        let server = TestServer::new(Fixture::Workstation);
+        let mut app = App::new(options(&server, GLOBAL_CLIENT)).unwrap();
 
         app.cycle_alias(true);
-        assert_eq!(app.current_alias(), "");
+        app.cycle_alias(true);
+        assert_eq!(app.current_alias(), "meetings");
+        assert_eq!(
+            app.client_ids,
+            vec![GLOBAL_CLIENT.to_string(), "other".to_string()]
+        );
+
+        app.cycle_client(true);
+        assert_eq!(app.current_client(), "other");
+        assert_eq!(app.records.len(), 1);
+        assert_eq!(app.records[0].command.as_deref(), Some("zoom"));
+
+        app.cycle_client(true);
+        assert_eq!(app.current_client(), GLOBAL_CLIENT);
+    }
+
+    #[test]
+    fn an_alias_filter_survives_client_cycling() {
+        let server = TestServer::new(Fixture::Workstation);
+        let mut options = options(&server, "workstation");
+        options.initial_alias = "development".to_string();
+        let mut app = App::new(options).unwrap();
+
+        // Only "workstation" recorded "development", so it is the sole non-global client left.
+        assert_eq!(
+            app.client_ids,
+            vec![GLOBAL_CLIENT.to_string(), "workstation".to_string()]
+        );
+
+        app.cycle_client(true);
+        assert_eq!(app.current_client(), GLOBAL_CLIENT);
+        assert_eq!(app.current_alias(), "development");
+        assert_eq!(app.records.len(), 1);
     }
 
     #[test]
