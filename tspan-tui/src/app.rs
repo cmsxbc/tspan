@@ -26,7 +26,10 @@ use ratatui::{
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
-    io::{self, IsTerminal},
+    fs::{File, OpenOptions},
+    io::{self, BufWriter, IsTerminal, Write},
+    path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -40,7 +43,7 @@ pub struct TuiOptions {
     pub initial_client_id: String,
     pub timezone: String,
     pub page_size: u16,
-    pub verbose: bool,
+    pub verbose_log: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,11 +190,16 @@ struct ApiClient {
     agent: ureq::Agent,
     base_url: String,
     authorization: String,
-    verbose: bool,
+    trace: Option<ApiTrace>,
 }
 
 impl ApiClient {
-    fn new(server_url: &str, username: &str, password: &str, verbose: bool) -> Result<Self> {
+    fn new(
+        server_url: &str,
+        username: &str,
+        password: &str,
+        verbose_log: Option<&Path>,
+    ) -> Result<Self> {
         let base_url = server_url.trim().trim_end_matches('/').to_string();
         anyhow::ensure!(
             base_url.starts_with("http://") || base_url.starts_with("https://"),
@@ -206,11 +214,12 @@ impl ApiClient {
                 .http_status_as_error(false)
                 .build(),
         );
+        let trace = verbose_log.map(ApiTrace::new).transpose()?;
         Ok(Self {
             agent,
             base_url,
             authorization: format!("Basic {encoded}"),
-            verbose,
+            trace,
         })
     }
 
@@ -380,14 +389,14 @@ impl ApiClient {
     where
         F: FnOnce() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
     {
-        if self.verbose {
-            eprintln!("[tspan-tui] --> {method} {url}");
+        if let Some(trace) = self.trace.as_ref() {
+            trace.request(method, url);
         }
         let mut response = match send() {
             Ok(response) => response,
             Err(error) => {
-                if self.verbose {
-                    eprintln!("[tspan-tui] <-- transport error: {error}");
+                if let Some(trace) = self.trace.as_ref() {
+                    trace.transport_error(&error);
                 }
                 return Err(anyhow!("{action}: {error}"));
             }
@@ -397,12 +406,65 @@ impl ApiClient {
             .body_mut()
             .read_to_string()
             .with_context(|| format!("{action}: could not read server response"))?;
-        if self.verbose {
-            eprintln!("[tspan-tui] <-- HTTP {status}");
-            eprintln!("[tspan-tui] raw response body:");
-            eprintln!("{body}");
+        if let Some(trace) = self.trace.as_ref() {
+            trace.response(status, &body);
         }
         Ok(ApiResponse { status, body })
+    }
+}
+
+struct ApiTrace {
+    writer: Mutex<BufWriter<File>>,
+}
+
+impl ApiTrace {
+    fn new(path: &Path) -> Result<Self> {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(path)
+            .with_context(|| format!("could not open verbose log '{}'", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!(
+                        "could not secure verbose log permissions '{}'",
+                        path.display()
+                    )
+                })?;
+        }
+        Ok(Self {
+            writer: Mutex::new(BufWriter::new(file)),
+        })
+    }
+
+    fn request(&self, method: &str, url: &str) {
+        self.write(&format!("[tspan-tui] --> {method} {url}\n"));
+    }
+
+    fn transport_error(&self, error: &ureq::Error) {
+        self.write(&format!("[tspan-tui] <-- transport error: {error}\n\n"));
+    }
+
+    fn response(&self, status: u16, body: &str) {
+        self.write(&format!(
+            "[tspan-tui] <-- HTTP {status}\n[tspan-tui] raw response body:\n{body}\n\n"
+        ));
+    }
+
+    fn write(&self, entry: &str) {
+        let Ok(mut writer) = self.writer.lock() else {
+            return;
+        };
+        let _ = writer.write_all(entry.as_bytes());
+        let _ = writer.flush();
     }
 }
 
@@ -471,7 +533,7 @@ impl App {
             &options.server_url,
             &options.username,
             &options.password,
-            options.verbose,
+            options.verbose_log.as_deref(),
         )?;
         let initial_client_id = if options.initial_client_id.trim().is_empty() {
             GLOBAL_CLIENT.to_string()
@@ -2162,7 +2224,7 @@ mod tests {
             initial_client_id: client_id.to_string(),
             timezone: "UTC".to_string(),
             page_size: 25,
-            verbose: false,
+            verbose_log: None,
         }
     }
 
@@ -2170,9 +2232,7 @@ mod tests {
     fn app_loads_stats_records_sessions_and_tokens() {
         let server = TestServer::new(Fixture::Workstation);
 
-        let mut options = options(&server, "workstation");
-        options.verbose = true;
-        let app = App::new(options).unwrap();
+        let app = App::new(options(&server, "workstation")).unwrap();
         assert_eq!(app.current_client(), "workstation");
         assert_eq!(app.overview.as_ref().unwrap().stats.total.total_times, 1);
         assert_eq!(app.records.len(), 1);
@@ -2243,13 +2303,40 @@ mod tests {
         let server = TestServer::new(Fixture::Empty);
         let mut options = options(&server, GLOBAL_CLIENT);
         options.password = "wrong".to_string();
-        options.verbose = true;
 
         let error = match App::new(options) {
             Ok(_) => panic!("invalid credentials unexpectedly succeeded"),
             Err(error) => error,
         };
         assert!(error.to_string().contains("authentication failed"));
+    }
+
+    #[test]
+    fn verbose_mode_writes_raw_responses_to_a_file() {
+        let server = TestServer::new(Fixture::Empty);
+        let path = std::env::temp_dir().join(format!(
+            "tspan-tui-api-test-{}-{}.log",
+            std::process::id(),
+            server.address.port()
+        ));
+        let mut options = options(&server, GLOBAL_CLIENT);
+        options.verbose_log = Some(path.clone());
+
+        let app = App::new(options).unwrap();
+        drop(app);
+        let log = std::fs::read_to_string(&path).unwrap();
+        assert!(log.contains("[tspan-tui] --> GET"));
+        assert!(log.contains("[tspan-tui] <-- HTTP 200"));
+        assert!(log.contains("[tspan-tui] raw response body:\n[]"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
