@@ -40,6 +40,7 @@ pub struct TuiOptions {
     pub initial_client_id: String,
     pub timezone: String,
     pub page_size: u16,
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,10 +186,11 @@ struct ApiClient {
     agent: ureq::Agent,
     base_url: String,
     authorization: String,
+    verbose: bool,
 }
 
 impl ApiClient {
-    fn new(server_url: &str, username: &str, password: &str) -> Result<Self> {
+    fn new(server_url: &str, username: &str, password: &str, verbose: bool) -> Result<Self> {
         let base_url = server_url.trim().trim_end_matches('/').to_string();
         anyhow::ensure!(
             base_url.starts_with("http://") || base_url.starts_with("https://"),
@@ -200,12 +202,14 @@ impl ApiClient {
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
                 .timeout_global(Some(Duration::from_secs(15)))
+                .http_status_as_error(false)
                 .build(),
         );
         Ok(Self {
             agent,
             base_url,
             authorization: format!("Basic {encoded}"),
+            verbose,
         })
     }
 
@@ -223,19 +227,18 @@ impl ApiClient {
         query: &[(&str, String)],
         action: &str,
     ) -> Result<T> {
+        let url = self.endpoint(path);
         let mut request = self
             .agent
-            .get(self.endpoint(path))
+            .get(&url)
             .header("Authorization", &self.authorization);
         for (key, value) in query {
             request = request.query(key, value);
         }
-        let mut response = request.call().map_err(|error| api_error(action, error))?;
-        let body = response
-            .body_mut()
-            .read_to_string()
-            .with_context(|| format!("{action}: could not read server response"))?;
-        serde_json::from_str(&body)
+        let display_url = display_url_with_query(&url, query);
+        let response = self.read_response("GET", &display_url, action, || request.call())?;
+        let body = response.success_body(action)?;
+        serde_json::from_str(body)
             .with_context(|| format!("{action}: server returned invalid JSON"))
     }
 
@@ -296,23 +299,18 @@ impl ApiClient {
     }
 
     fn end_session(&self, id: i64) -> Result<Option<i64>> {
+        let url = self.endpoint(&format!("sessions/{id}/end"));
         let request = self
             .agent
-            .post(self.endpoint(&format!("sessions/{id}/end")))
+            .post(&url)
             .header("Authorization", &self.authorization);
-        match request.send_empty() {
-            Ok(mut response) => {
-                let body = response
-                    .body_mut()
-                    .read_to_string()
-                    .context("end session: could not read server response")?;
-                let result: EndSessionResp = serde_json::from_str(&body)
-                    .context("end session: server returned invalid JSON")?;
-                Ok(Some(result.duration_seconds))
-            }
-            Err(ureq::Error::StatusCode(404)) => Ok(None),
-            Err(error) => Err(api_error("end session", error)),
+        let response = self.read_response("POST", &url, "end session", || request.send_empty())?;
+        if response.status == 404 {
+            return Ok(None);
         }
+        let result: EndSessionResp = serde_json::from_str(response.success_body("end session")?)
+            .context("end session: server returned invalid JSON")?;
+        Ok(Some(result.duration_seconds))
     }
 
     fn discard_session(&self, id: i64) -> Result<bool> {
@@ -325,19 +323,15 @@ impl ApiClient {
             description: description.map(str::to_string),
         })
         .context("create token: could not encode request")?;
-        let mut response = self
+        let url = self.endpoint("admin/tokens");
+        let request = self
             .agent
-            .post(self.endpoint("admin/tokens"))
+            .post(&url)
             .header("Authorization", &self.authorization)
-            .header("Content-Type", "application/json")
-            .send(body)
-            .map_err(|error| api_error("create token", error))?;
-        let body = response
-            .body_mut()
-            .read_to_string()
-            .context("create token: could not read server response")?;
-        let result: CreateTokenResp =
-            serde_json::from_str(&body).context("create token: server returned invalid JSON")?;
+            .header("Content-Type", "application/json");
+        let response = self.read_response("POST", &url, "create token", || request.send(body))?;
+        let result: CreateTokenResp = serde_json::from_str(response.success_body("create token")?)
+            .context("create token: server returned invalid JSON")?;
         Ok(result.token)
     }
 
@@ -346,41 +340,99 @@ impl ApiClient {
     }
 
     fn delete(&self, path: &str, action: &str) -> Result<bool> {
-        match self
+        let url = self.endpoint(path);
+        let request = self
             .agent
-            .delete(self.endpoint(path))
-            .header("Authorization", &self.authorization)
-            .call()
-        {
-            Ok(_) => Ok(true),
-            Err(ureq::Error::StatusCode(404)) => Ok(false),
-            Err(error) => Err(api_error(action, error)),
+            .delete(&url)
+            .header("Authorization", &self.authorization);
+        let response = self.read_response("DELETE", &url, action, || request.call())?;
+        if response.status == 404 {
+            Ok(false)
+        } else {
+            response.success_body(action)?;
+            Ok(true)
         }
     }
 
     fn post_empty(&self, path: &str, action: &str) -> Result<bool> {
-        match self
+        let url = self.endpoint(path);
+        let request = self
             .agent
-            .post(self.endpoint(path))
-            .header("Authorization", &self.authorization)
-            .send_empty()
-        {
-            Ok(_) => Ok(true),
-            Err(ureq::Error::StatusCode(404)) => Ok(false),
-            Err(error) => Err(api_error(action, error)),
+            .post(&url)
+            .header("Authorization", &self.authorization);
+        let response = self.read_response("POST", &url, action, || request.send_empty())?;
+        if response.status == 404 {
+            Ok(false)
+        } else {
+            response.success_body(action)?;
+            Ok(true)
+        }
+    }
+
+    fn read_response<F>(
+        &self,
+        method: &str,
+        url: &str,
+        action: &str,
+        send: F,
+    ) -> Result<ApiResponse>
+    where
+        F: FnOnce() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    {
+        if self.verbose {
+            eprintln!("[tspan-tui] --> {method} {url}");
+        }
+        let mut response = match send() {
+            Ok(response) => response,
+            Err(error) => {
+                if self.verbose {
+                    eprintln!("[tspan-tui] <-- transport error: {error}");
+                }
+                return Err(anyhow!("{action}: {error}"));
+            }
+        };
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .with_context(|| format!("{action}: could not read server response"))?;
+        if self.verbose {
+            eprintln!("[tspan-tui] <-- HTTP {status}");
+            eprintln!("[tspan-tui] raw response body:");
+            eprintln!("{body}");
+        }
+        Ok(ApiResponse { status, body })
+    }
+}
+
+struct ApiResponse {
+    status: u16,
+    body: String,
+}
+
+impl ApiResponse {
+    fn success_body(&self, action: &str) -> Result<&str> {
+        match self.status {
+            200..=299 => Ok(&self.body),
+            401 => Err(anyhow!(
+                "{action}: authentication failed (check --username and --password)"
+            )),
+            403 => Err(anyhow!("{action}: administrator access is required")),
+            status => Err(anyhow!("{action}: server returned HTTP {status}")),
         }
     }
 }
 
-fn api_error(action: &str, error: ureq::Error) -> anyhow::Error {
-    match error {
-        ureq::Error::StatusCode(401) => {
-            anyhow!("{action}: authentication failed (check --username and --password)")
-        }
-        ureq::Error::StatusCode(403) => anyhow!("{action}: administrator access is required"),
-        ureq::Error::StatusCode(status) => anyhow!("{action}: server returned HTTP {status}"),
-        error => anyhow!("{action}: {error}"),
+fn display_url_with_query(url: &str, query: &[(&str, String)]) -> String {
+    if query.is_empty() {
+        return url.to_string();
     }
+    let query = query
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{url}?{query}")
 }
 
 struct App {
@@ -413,7 +465,12 @@ impl App {
             .timezone
             .parse::<Tz>()
             .with_context(|| format!("invalid time zone '{}'", options.timezone))?;
-        let api = ApiClient::new(&options.server_url, &options.username, &options.password)?;
+        let api = ApiClient::new(
+            &options.server_url,
+            &options.username,
+            &options.password,
+            options.verbose,
+        )?;
         let initial_client_id = if options.initial_client_id.trim().is_empty() {
             GLOBAL_CLIENT.to_string()
         } else {
@@ -2060,6 +2117,7 @@ mod tests {
             initial_client_id: client_id.to_string(),
             timezone: "UTC".to_string(),
             page_size: 25,
+            verbose: false,
         }
     }
 
@@ -2067,7 +2125,9 @@ mod tests {
     fn app_loads_stats_records_sessions_and_tokens() {
         let server = TestServer::new(Fixture::Workstation);
 
-        let app = App::new(options(&server, "workstation")).unwrap();
+        let mut options = options(&server, "workstation");
+        options.verbose = true;
+        let app = App::new(options).unwrap();
         assert_eq!(app.current_client(), "workstation");
         assert_eq!(app.overview.as_ref().unwrap().stats.total.total_times, 1);
         assert_eq!(app.records.len(), 1);
@@ -2123,6 +2183,7 @@ mod tests {
         let server = TestServer::new(Fixture::Empty);
         let mut options = options(&server, GLOBAL_CLIENT);
         options.password = "wrong".to_string();
+        options.verbose = true;
 
         let error = match App::new(options) {
             Ok(_) => panic!("invalid credentials unexpectedly succeeded"),
@@ -2153,5 +2214,19 @@ mod tests {
     fn token_redaction_keeps_context() {
         assert_eq!(redact_token("tspan_1234567890abcdef"), "tspan_1234…cdef");
         assert_eq!(redact_token("short-token"), "short-token");
+    }
+
+    #[test]
+    fn verbose_url_includes_query_parameters() {
+        assert_eq!(
+            display_url_with_query(
+                "https://example.test/api/stats",
+                &[
+                    ("client_id", "workstation".to_string()),
+                    ("tz", "UTC".to_string())
+                ]
+            ),
+            "https://example.test/api/stats?client_id=workstation&tz=UTC"
+        );
     }
 }

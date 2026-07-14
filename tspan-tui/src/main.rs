@@ -38,6 +38,12 @@ struct Cli {
         value_parser = clap::value_parser!(u16).range(5..=200)
     )]
     page_size: u16,
+
+    /// Print API requests, status codes, and raw response bodies to stderr
+    ///
+    /// Raw bodies may contain API tokens, commands, and other sensitive data.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -49,5 +55,21 @@ fn main() -> anyhow::Result<()> {
         initial_client_id: cli.client_id,
         timezone: cli.timezone,
         page_size: cli.page_size,
+        verbose: cli.verbose,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbose_short_and_long_flags_are_accepted() {
+        assert!(Cli::try_parse_from(["tspan-tui", "-v"]).unwrap().verbose);
+        assert!(
+            Cli::try_parse_from(["tspan-tui", "--verbose"])
+                .unwrap()
+                .verbose
+        );
+    }
 }

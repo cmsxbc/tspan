@@ -68,9 +68,17 @@ export TSPAN_TUI_PASSWORD='your-admin-password'
   --client-id workstation \
   --timezone America/New_York \
   --page-size 50
+
+# Debug API traffic and save raw server responses
+umask 077
+./target/release/tspan-tui --verbose \
+  --server https://tspan.example.com \
+  2>tspan-tui-api.log
 ```
 
 `tspan-tui` is a separate executable and can be copied to an administrator's machine without `tspan-server`. It has no runtime or build dependency on the server crate, SQLite, or the database file. `TSPAN_TUI_SERVER` and `TSPAN_TUI_USERNAME` can also provide the server URL and username. The TUI authenticates with HTTP Basic Auth and uses only `/api/*` endpoints. Use HTTPS when connecting across a network so the credentials are encrypted in transit.
+
+`-v` / `--verbose` writes every API method and URL, HTTP status, and unmodified response body to stderr. Authorization headers are never printed. Redirect stderr as shown above to avoid interfering with the full-screen interface. Raw responses can contain API tokens, tracked commands, and other sensitive data, so protect and delete debug logs appropriately.
 
 The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
 
