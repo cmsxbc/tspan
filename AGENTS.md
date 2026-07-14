@@ -8,6 +8,7 @@
 
 - **Server**: Rust (axum) + SQLite (WAL mode) + native SVG generation
 - **Client**: Bash wrapper (`tspanrun`) using `curl`
+- **Admin TUI**: Standalone `tspan-tui` Rust binary using only authenticated HTTP APIs
 - **eBPF Agent**: `tspan-ebpf` — per-host daemon capturing `execve` via eBPF and exporting to server
 - **Web UI**: Single-page dashboard with embedded vanilla JavaScript (no frontend framework)
 - **Charts**: Pure SVG generated server-side (no external charting library)
@@ -25,7 +26,8 @@
 | Password Hashing | bcrypt (optional; plaintext fallback supported) |
 | Serialization | serde + serde_json |
 | CLI Parsing | clap v4 |
-| Configuration | Command-line args + env vars (`WEB_PASSWORD`, `TSPANRUN_*`) |
+| Terminal UI | ratatui + crossterm; HTTP via ureq |
+| Configuration | Command-line args + env vars (`WEB_PASSWORD`, `TSPANRUN_*`, `TSPAN_TUI_*`) |
 | Logging | tracing + tracing-subscriber with env-filter |
 
 ## Project Structure
@@ -43,6 +45,11 @@
 │   ├── svg_calendar.rs     # Native SVG calendar generation (GitHub-style contribution graph)
 │   ├── markdown.rs         # Markdown report with base64-encoded SVGs
 │   └── importer.rs         # Historical record importer from text files
+├── tspan-tui/              # Standalone remote terminal admin client crate
+│   └── src/
+│       ├── main.rs         # TUI CLI entry point
+│       ├── app.rs          # API client, UI state, rendering, and admin actions
+│       └── api_types.rs    # Local HTTP request/response contracts
 ├── tspanrun                  # Bash client wrapper script
 ├── tspan-ebpf/             # eBPF agent (independent crate)
 │   ├── ebpf/
@@ -87,7 +94,12 @@ WEB_PASSWORD=secret ./dev.sh --bind 127.0.0.1:3000
 ```bash
 cargo build --release
 # Binary: ./target/release/tspan-server
+
+cargo build --release -p tspan-tui
+# Binary: ./target/release/tspan-tui
 ```
+
+The TUI is an independent workspace crate. It does not depend on `tspan-server`, axum, SQLite, or the database file and communicates only through `/api/*` endpoints using HTTP Basic Auth.
 
 ### Database Initialization
 
@@ -233,16 +245,13 @@ SQLite is accessed through a single shared connection wrapped in `Arc<Mutex<Conn
 
 ## Testing
 
-**There are currently no automated tests in this project** (no `tests/` directory, no `#[cfg(test)]` modules). All validation is manual via:
-
-1. Building and running the server
-2. Using `tspanrun` to track commands
-3. Checking the web dashboard
-4. Importing historical data and verifying stats
+Automated unit tests cover database command-token behavior, grouped command statistics, and the standalone TUI. TUI tests use a mock HTTP server so they do not depend on server or database code.
 
 When making changes, verify by:
-- `cargo build` (or `cargo build --release`)
-- Running `./dev.sh` and testing the affected endpoint via browser or curl
+- `cargo test --workspace --all-targets`
+- `cargo build --release -p tspan-server`
+- `cargo build --release -p tspan-tui`
+- Running `./dev.sh` and testing affected endpoints via browser or curl when applicable
 - Checking `tracing` logs for errors
 
 ## Deployment

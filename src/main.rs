@@ -8,7 +8,6 @@ mod markdown;
 mod server;
 mod stats;
 mod svg_calendar;
-mod tui;
 
 use auth::AuthConfig;
 use server::AppState;
@@ -60,35 +59,6 @@ enum Commands {
     TokenRevoke {
         token: String,
     },
-    /// Open the interactive terminal admin interface
-    Tui {
-        /// Base URL of the remote tspan server
-        #[arg(
-            long,
-            default_value = "http://127.0.0.1:8080",
-            env = "TSPAN_TUI_SERVER"
-        )]
-        server: String,
-        /// HTTP Basic Auth username
-        #[arg(long, default_value = "admin", env = "TSPAN_TUI_USERNAME")]
-        username: String,
-        /// HTTP Basic Auth password
-        #[arg(long, default_value = "changeme", env = "TSPAN_TUI_PASSWORD")]
-        password: String,
-        /// Initially selected client (defaults to all clients)
-        #[arg(long, default_value = "__global__")]
-        client_id: String,
-        /// Time zone used to display timestamps and compute daily statistics
-        #[arg(long, default_value = "UTC")]
-        timezone: String,
-        /// Number of records shown on each page
-        #[arg(
-            long,
-            default_value_t = 25,
-            value_parser = clap::value_parser!(u16).range(5..=200)
-        )]
-        page_size: u16,
-    },
 }
 
 #[tokio::main]
@@ -102,26 +72,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-
-    // The TUI is a remote API client and must not open the local database.
-    if let Some(Commands::Tui {
-        server,
-        username,
-        password,
-        client_id,
-        timezone,
-        page_size,
-    }) = &cli.command
-    {
-        return tui::run(tui::TuiOptions {
-            server_url: server.clone(),
-            username: username.clone(),
-            password: password.clone(),
-            initial_client_id: client_id.clone(),
-            timezone: timezone.clone(),
-            page_size: *page_size,
-        });
-    }
 
     let pool = db::create_pool(&cli.database)?;
 
@@ -160,7 +110,6 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Some(Commands::Tui { .. }) => unreachable!("TUI handled before database initialization"),
         None => {
             // Default: start server
             // Ensure at least one token exists for initial setup

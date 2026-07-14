@@ -2106,9 +2106,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "config",
- "crossterm",
  "parking_lot",
- "ratatui",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2119,6 +2117,22 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "uuid",
+]
+
+[[package]]
+name = "tspan-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "crossterm",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

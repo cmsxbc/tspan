@@ -16,9 +16,11 @@ RUN if [ -n "$CARGO_REGISTRY" ]; then \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tspan-tui/Cargo.toml ./tspan-tui/Cargo.toml
+COPY tspan-tui/src ./tspan-tui/src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release
+    cargo build --release -p tspan-server
 
 # Runtime stage (minimal image)
 FROM gcr.io/distroless/cc-debian12

@@ -7,7 +7,11 @@ A C/S architecture activity tracker. Record how much time you spend on various t
 ### Build
 
 ```bash
+# Server and backup client
 cargo build --release
+
+# Standalone terminal admin client
+cargo build --release -p tspan-tui
 ```
 
 ### Initialize & Import History
@@ -54,19 +58,19 @@ Run the interactive TUI against a tspan server. Supplying the password through t
 
 ```bash
 export TSPAN_TUI_PASSWORD='your-admin-password'
-./target/release/tspan-server tui \
+./target/release/tspan-tui \
   --server https://tspan.example.com \
   --username admin
 
 # Start on one client, use local time, and show 50 records per page
-./target/release/tspan-server tui \
+./target/release/tspan-tui \
   --server https://tspan.example.com \
   --client-id workstation \
   --timezone America/New_York \
   --page-size 50
 ```
 
-`TSPAN_TUI_SERVER` and `TSPAN_TUI_USERNAME` can also provide the server URL and username. The TUI authenticates with HTTP Basic Auth and uses only `/api/*` endpoints—it never opens or requires access to the server's SQLite database. Use HTTPS when connecting across a network so the credentials are encrypted in transit.
+`tspan-tui` is a separate executable and can be copied to an administrator's machine without `tspan-server`. It has no runtime or build dependency on the server crate, SQLite, or the database file. `TSPAN_TUI_SERVER` and `TSPAN_TUI_USERNAME` can also provide the server URL and username. The TUI authenticates with HTTP Basic Auth and uses only `/api/*` endpoints. Use HTTPS when connecting across a network so the credentials are encrypted in transit.
 
 The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
 
@@ -139,5 +143,6 @@ chmod +x scripts/tspan-rofi-drun
 
 - **Server**: Rust (axum) + SQLite (WAL mode) + native SVG generation
 - **Client**: Bash wrapper (`tspanrun`) using `curl`
+- **Admin TUI**: Standalone Rust API client (`tspan-tui`)
 - **Storage**: Single SQLite file, zero external dependencies for charts
 - **Backup**: Online backup via SQLite backup API (`/api/admin/backup`)

@@ -1,9 +1,7 @@
-use crate::{
-    server::{
-        CreateTokenReq, CreateTokenResp, EndSessionResp, OrphanedSession, RecordPageItem,
-        RecordsPageResp,
-    },
-    stats::{self, AliasStat, ClientStat, CommandStat, SessionDistribution, Stats, StreakStats},
+use crate::api_types::{
+    human_readable_time, AliasStat, ClientStat, CommandStat, CreateTokenReq, CreateTokenResp,
+    EndSessionResp, OrphanedSession, RecordPageItem, RecordsPageResp, SessionDistribution, Stats,
+    StreakStats,
 };
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
@@ -850,10 +848,7 @@ impl App {
                 }
                 AdminAction::EndSession(id) => match self.api.end_session(id)? {
                     Some(duration) => {
-                        format!(
-                            "Session #{id} ended ({})",
-                            stats::human_readable_time(duration)
-                        )
+                        format!("Session #{id} ended ({})", human_readable_time(duration))
                     }
                     None => format!("Session #{id} is no longer active"),
                 },
@@ -1084,7 +1079,7 @@ impl App {
         let recent_rows = data.stats.past_n.iter().map(|period| {
             Row::new(vec![
                 Cell::from(period.name.clone()),
-                Cell::from(stats::human_readable_time(period.seconds)),
+                Cell::from(human_readable_time(period.seconds)),
                 Cell::from(period.times.to_string()),
                 Cell::from(format!("{:.1}%", period.day_ratio)),
             ])
@@ -1249,7 +1244,7 @@ impl App {
                 Cell::from(record.id.to_string()),
                 Cell::from(format_timestamp(record.start_time, self.timezone)),
                 Cell::from(record.client_id.clone()),
-                Cell::from(stats::human_readable_time(
+                Cell::from(human_readable_time(
                     record.duration_seconds.unwrap_or_default(),
                 )),
                 Cell::from(record.alias.clone().unwrap_or_default()),
@@ -1296,9 +1291,7 @@ impl App {
                 Cell::from(record.id.to_string()),
                 Cell::from(format_timestamp(record.start_time, self.timezone)),
                 Cell::from(record.client_id.clone()),
-                Cell::from(stats::human_readable_time(
-                    now.saturating_sub(record.start_time),
-                )),
+                Cell::from(human_readable_time(now.saturating_sub(record.start_time))),
                 Cell::from(record.alias.clone().unwrap_or_default()),
                 Cell::from(record.command.clone().unwrap_or_default()),
             ])
@@ -1734,47 +1727,329 @@ fn select_previous(state: &mut TableState, len: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        auth::AuthConfig,
-        db,
-        server::{self, AppState},
-    };
     use ratatui::backend::TestBackend;
+    use serde_json::json;
+    use std::{
+        io::{Read, Write},
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread::{self, JoinHandle},
+    };
+
+    #[derive(Clone, Copy)]
+    enum Fixture {
+        Empty,
+        Workstation,
+        Actions,
+    }
+
+    struct MockState {
+        fixture: Fixture,
+        record_deleted: AtomicBool,
+        session_ended: AtomicBool,
+        token_revoked: AtomicBool,
+    }
 
     struct TestServer {
-        _runtime: tokio::runtime::Runtime,
-        pool: db::DbPool,
+        address: SocketAddr,
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
         url: String,
     }
 
     impl TestServer {
-        fn new() -> Self {
-            let pool = db::create_pool(":memory:").unwrap();
-            let app = server::create_router(AppState {
-                pool: pool.clone(),
-                auth: AuthConfig {
-                    web_username: "admin".to_string(),
-                    web_password_hash: "secret".to_string(),
-                },
-                command_token_limit: 5,
-            });
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            let listener = runtime
-                .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
-                .unwrap();
+        fn new(fixture: Fixture) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
-            runtime.spawn(async move {
-                axum::serve(listener, app).await.unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let state = Arc::new(MockState {
+                fixture,
+                record_deleted: AtomicBool::new(false),
+                session_ended: AtomicBool::new(false),
+                token_revoked: AtomicBool::new(false),
+            });
+            let thread_stop = stop.clone();
+            let thread = thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if thread_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if let Ok(stream) = stream {
+                        serve_request(stream, &state);
+                    }
+                }
             });
             Self {
-                _runtime: runtime,
-                pool,
+                address,
+                stop,
+                thread: Some(thread),
                 url: format!("http://{address}"),
             }
         }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            let _ = TcpStream::connect(self.address);
+            if let Some(thread) = self.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+
+    fn serve_request(mut stream: TcpStream, state: &MockState) {
+        let mut bytes = [0_u8; 16 * 1024];
+        let Ok(length) = stream.read(&mut bytes) else {
+            return;
+        };
+        let request = String::from_utf8_lossy(&bytes[..length]);
+        let expected = base64::engine::general_purpose::STANDARD.encode("admin:secret");
+        let authenticated = request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case(&format!("Authorization: Basic {expected}")));
+        let Some(first_line) = request.lines().next() else {
+            return;
+        };
+        let mut parts = first_line.split_whitespace();
+        let method = parts.next().unwrap_or_default();
+        let path = parts.next().unwrap_or_default();
+        let (status, body) = if authenticated {
+            mock_response(method, path, state)
+        } else {
+            (401, json!({ "error": "unauthorized" }).to_string())
+        };
+        let status_text = match status {
+            200 => "OK",
+            401 => "Unauthorized",
+            404 => "Not Found",
+            _ => "Error",
+        };
+        write!(
+            stream,
+            "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    }
+
+    fn mock_response(method: &str, path: &str, state: &MockState) -> (u16, String) {
+        let route = path.split('?').next().unwrap_or(path);
+        match (method, route) {
+            ("GET", "/api/clients") => (200, clients_payload(state.fixture)),
+            ("GET", "/api/admin/tokens") => (200, tokens_payload(state)),
+            ("GET", "/api/records") => (200, records_payload(state)),
+            ("GET", "/api/sessions/orphaned") => (200, active_payload(state)),
+            ("GET", "/api/stats") => (200, stats_payload(state.fixture)),
+            ("GET", "/api/stats/streaks") => (200, streaks_payload()),
+            ("GET", "/api/stats/session-distribution") => (200, distribution_payload()),
+            ("GET", "/api/stats/by-client")
+            | ("GET", "/api/stats/by-alias")
+            | ("GET", "/api/stats/by-command") => (200, "[]".to_string()),
+            ("DELETE", "/api/admin/records/1") => {
+                state.record_deleted.store(true, Ordering::Relaxed);
+                (200, "{}".to_string())
+            }
+            ("POST", "/api/sessions/2/end") => {
+                state.session_ended.store(true, Ordering::Relaxed);
+                (
+                    200,
+                    json!({ "session_id": 2, "duration_seconds": 60 }).to_string(),
+                )
+            }
+            ("POST", "/api/sessions/2/discard") => {
+                state.session_ended.store(true, Ordering::Relaxed);
+                (200, "{}".to_string())
+            }
+            ("POST", "/api/admin/tokens") => (200, json!({ "token": "tspan_created" }).to_string()),
+            ("DELETE", "/api/admin/tokens/tspan_revoke_me") => {
+                state.token_revoked.store(true, Ordering::Relaxed);
+                (200, "{}".to_string())
+            }
+            _ => (404, json!({ "error": "not found" }).to_string()),
+        }
+    }
+
+    fn clients_payload(fixture: Fixture) -> String {
+        match fixture {
+            Fixture::Empty => json!([]),
+            Fixture::Workstation => json!(["workstation", "other"]),
+            Fixture::Actions => json!(["client"]),
+        }
+        .to_string()
+    }
+
+    fn tokens_payload(state: &MockState) -> String {
+        let tokens = match state.fixture {
+            Fixture::Empty => json!([]),
+            Fixture::Workstation => json!([
+                {
+                    "token": "tspan_test",
+                    "client_id": "workstation",
+                    "description": "test",
+                    "created_at": 1_700_000_000
+                },
+                {
+                    "token": "tspan_other",
+                    "client_id": "other",
+                    "description": null,
+                    "created_at": 1_700_000_000
+                }
+            ]),
+            Fixture::Actions if !state.token_revoked.load(Ordering::Relaxed) => json!([{
+                "token": "tspan_revoke_me",
+                "client_id": "client",
+                "description": null,
+                "created_at": 1_700_000_000
+            }]),
+            Fixture::Actions => json!([]),
+        };
+        tokens.to_string()
+    }
+
+    fn records_payload(state: &MockState) -> String {
+        let mut records = Vec::new();
+        match state.fixture {
+            Fixture::Workstation => records.push(json!({
+                "id": 1,
+                "client_id": "workstation",
+                "alias": "development",
+                "command": "cargo test",
+                "start_time": 1_700_000_000,
+                "end_time": 1_700_000_120,
+                "duration_seconds": 120,
+                "status": "completed"
+            })),
+            Fixture::Actions => {
+                if !state.record_deleted.load(Ordering::Relaxed) {
+                    records.push(json!({
+                        "id": 1,
+                        "client_id": "client",
+                        "alias": null,
+                        "command": "done",
+                        "start_time": 100,
+                        "end_time": 160,
+                        "duration_seconds": 60,
+                        "status": "completed"
+                    }));
+                }
+                if state.session_ended.load(Ordering::Relaxed) {
+                    records.push(json!({
+                        "id": 2,
+                        "client_id": "client",
+                        "alias": null,
+                        "command": "running",
+                        "start_time": 200,
+                        "end_time": 260,
+                        "duration_seconds": 60,
+                        "status": "completed"
+                    }));
+                }
+            }
+            Fixture::Empty => {}
+        }
+        json!({
+            "total": records.len(),
+            "page": 1,
+            "per_page": 25,
+            "total_pages": 1,
+            "records": records
+        })
+        .to_string()
+    }
+
+    fn active_payload(state: &MockState) -> String {
+        let active = match state.fixture {
+            Fixture::Workstation => json!([
+                {
+                    "id": 2,
+                    "client_id": "workstation",
+                    "start_time": 1_700_000_200,
+                    "running_seconds": 30,
+                    "command": "vim",
+                    "alias": null,
+                    "process_id": null
+                },
+                {
+                    "id": 3,
+                    "client_id": "other",
+                    "start_time": 1_700_000_200,
+                    "running_seconds": 30,
+                    "command": "sleep",
+                    "alias": null,
+                    "process_id": null
+                }
+            ]),
+            Fixture::Actions if !state.session_ended.load(Ordering::Relaxed) => json!([{
+                "id": 2,
+                "client_id": "client",
+                "start_time": 200,
+                "running_seconds": 30,
+                "command": "running",
+                "alias": null,
+                "process_id": null
+            }]),
+            Fixture::Empty | Fixture::Actions => json!([]),
+        };
+        active.to_string()
+    }
+
+    fn stats_payload(fixture: Fixture) -> String {
+        let total_times = i64::from(matches!(fixture, Fixture::Workstation));
+        json!({
+            "total": {
+                "total_days": 1,
+                "active_days": total_times,
+                "total_seconds": total_times * 120,
+                "total_times": total_times,
+                "mean_usage": total_times * 120,
+                "total_ratio": 0.0,
+                "total_day_ratio": 0.0,
+                "from_date": "2023-11-14",
+                "total_duration_hr": "00 h 02 m 00 s",
+                "total_seconds_hr": "00 h 02 m 00 s",
+                "mean_usage_hr": "00 h 02 m 00 s"
+            },
+            "past_n": [],
+            "interval": {
+                "current_interval": 0,
+                "current_interval_hr": "0 s",
+                "max_interval": 0,
+                "max_interval_hr": "0 s",
+                "mean_interval": 0,
+                "mean_interval_hr": "0 s"
+            }
+        })
+        .to_string()
+    }
+
+    fn streaks_payload() -> String {
+        json!({
+            "current_streak": 0,
+            "max_streak": 0,
+            "last_active_date": "",
+            "last_active_time_hr": "0 s"
+        })
+        .to_string()
+    }
+
+    fn distribution_payload() -> String {
+        json!({
+            "max_seconds": 0,
+            "min_seconds": 0,
+            "median_seconds": 0,
+            "mean_seconds": 0,
+            "total_sessions": 0,
+            "max_seconds_hr": "0 s",
+            "min_seconds_hr": "0 s",
+            "median_seconds_hr": "0 s",
+            "mean_seconds_hr": "0 s",
+            "buckets": []
+        })
+        .to_string()
     }
 
     fn options(server: &TestServer, client_id: &str) -> TuiOptions {
@@ -1790,24 +2065,7 @@ mod tests {
 
     #[test]
     fn app_loads_stats_records_sessions_and_tokens() {
-        let server = TestServer::new();
-        {
-            let mut conn = server.pool.lock();
-            db::import_record(
-                &mut conn,
-                "workstation",
-                1_700_000_000,
-                1_700_000_120,
-                120,
-                Some("cargo test"),
-                Some("development"),
-            )
-            .unwrap();
-            db::start_session(&mut conn, "workstation", Some("vim"), None, None).unwrap();
-            db::add_api_token(&mut conn, "tspan_test", "workstation", Some("test")).unwrap();
-            db::start_session(&mut conn, "other", Some("sleep"), None, None).unwrap();
-            db::add_api_token(&mut conn, "tspan_other", "other", None).unwrap();
-        }
+        let server = TestServer::new(Fixture::Workstation);
 
         let app = App::new(options(&server, "workstation")).unwrap();
         assert_eq!(app.current_client(), "workstation");
@@ -1821,7 +2079,7 @@ mod tests {
 
     #[test]
     fn all_views_render_at_the_minimum_supported_size() {
-        let server = TestServer::new();
+        let server = TestServer::new(Fixture::Empty);
         let mut app = App::new(options(&server, GLOBAL_CLIENT)).unwrap();
         let backend = TestBackend::new(60, 16);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1846,25 +2104,15 @@ mod tests {
 
     #[test]
     fn confirmed_admin_actions_refresh_the_loaded_data() {
-        let server = TestServer::new();
-        let record_id;
-        let session_id;
-        {
-            let mut conn = server.pool.lock();
-            db::import_record(&mut conn, "client", 100, 160, 60, Some("done"), None).unwrap();
-            record_id = conn.last_insert_rowid();
-            session_id =
-                db::start_session(&mut conn, "client", Some("running"), None, None).unwrap();
-            db::add_api_token(&mut conn, "tspan_revoke_me", "client", None).unwrap();
-        }
+        let server = TestServer::new(Fixture::Actions);
         let mut app = App::new(options(&server, GLOBAL_CLIENT)).unwrap();
 
-        app.perform_action(AdminAction::DeleteRecord(record_id));
-        assert!(app.records.iter().all(|record| record.id != record_id));
+        app.perform_action(AdminAction::DeleteRecord(1));
+        assert!(app.records.iter().all(|record| record.id != 1));
 
-        app.perform_action(AdminAction::EndSession(session_id));
-        assert!(app.active.iter().all(|record| record.id != session_id));
-        assert!(app.records.iter().any(|record| record.id == session_id));
+        app.perform_action(AdminAction::EndSession(2));
+        assert!(app.active.iter().all(|record| record.id != 2));
+        assert!(app.records.iter().any(|record| record.id == 2));
 
         app.perform_action(AdminAction::RevokeToken("tspan_revoke_me".to_string()));
         assert!(app.tokens.is_empty());
@@ -1872,7 +2120,7 @@ mod tests {
 
     #[test]
     fn authentication_failures_are_reported_clearly() {
-        let server = TestServer::new();
+        let server = TestServer::new(Fixture::Empty);
         let mut options = options(&server, GLOBAL_CLIENT);
         options.password = "wrong".to_string();
 
