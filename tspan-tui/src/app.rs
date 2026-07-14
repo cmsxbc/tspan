@@ -180,6 +180,7 @@ enum Overlay {
 struct Notice {
     text: String,
     is_error: bool,
+    is_warning: bool,
 }
 
 struct ApiClient {
@@ -455,6 +456,7 @@ struct App {
     tokens_state: TableState,
     overlay: Option<Overlay>,
     notice: Option<Notice>,
+    legacy_records_api: bool,
     should_quit: bool,
     last_refresh: Instant,
 }
@@ -496,6 +498,7 @@ impl App {
             tokens_state: TableState::default(),
             overlay: None,
             notice: None,
+            legacy_records_api: false,
             should_quit: false,
             last_refresh: Instant::now(),
         };
@@ -559,6 +562,10 @@ impl App {
                 .api
                 .records(&client_id, self.records_page, self.page_size)?;
         }
+        let missing_record_status = record_page
+            .records
+            .iter()
+            .any(|record| record.status.is_none());
         let mut active = self.api.active_sessions()?;
         let mut tokens = self.api.tokens()?;
         if client_id != GLOBAL_CLIENT {
@@ -571,6 +578,12 @@ impl App {
         self.records_total = record_page.total;
         self.active = active;
         self.tokens = tokens;
+        if missing_record_status && !self.legacy_records_api {
+            self.legacy_records_api = true;
+            self.set_warning(
+                "Compatibility warning: this server omits record status; values are inferred locally. Upgrade tspan-server.",
+            );
+        }
         select_clamped(
             &mut self.records_state,
             old_record_selection,
@@ -613,6 +626,15 @@ impl App {
         self.notice = Some(Notice {
             text: text.into(),
             is_error: false,
+            is_warning: false,
+        });
+    }
+
+    fn set_warning(&mut self, text: impl Into<String>) {
+        self.notice = Some(Notice {
+            text: text.into(),
+            is_error: false,
+            is_warning: true,
         });
     }
 
@@ -620,6 +642,7 @@ impl App {
         self.notice = Some(Notice {
             text: error.to_string(),
             is_error: true,
+            is_warning: false,
         });
     }
 
@@ -1005,11 +1028,17 @@ impl App {
             .enumerate()
             .map(|(index, view)| Line::from(format!(" {} {} ", index + 1, view.title())))
             .collect::<Vec<_>>();
+        let compatibility = if self.legacy_records_api {
+            " · LEGACY API"
+        } else {
+            ""
+        };
         let title = format!(
-            " TSPAN Admin · {} · {} · {} ",
+            " TSPAN Admin · {} · {} · {}{} ",
             self.api.label(),
             self.current_client_label(),
-            self.timezone
+            self.timezone,
+            compatibility
         );
         let tabs = Tabs::new(titles)
             .select(self.view.index())
@@ -1017,7 +1046,11 @@ impl App {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(title)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(if self.legacy_records_api {
+                        Color::Yellow
+                    } else {
+                        Color::DarkGray
+                    })),
             )
             .style(Style::default().fg(Color::Gray))
             .highlight_style(
@@ -1046,10 +1079,10 @@ impl App {
             }
         };
         let notice = self.notice.as_ref();
-        let notice_style = if notice.is_some_and(|notice| notice.is_error) {
-            Style::default().fg(Color::Red)
-        } else {
-            Style::default().fg(Color::Green)
+        let notice_style = match notice {
+            Some(notice) if notice.is_error => Style::default().fg(Color::Red),
+            Some(notice) if notice.is_warning => Style::default().fg(Color::Yellow),
+            _ => Style::default().fg(Color::Green),
         };
         let lines = vec![
             Line::from(Span::styled(help, Style::default().fg(Color::DarkGray))),
@@ -1306,7 +1339,7 @@ impl App {
                 )),
                 Cell::from(record.alias.clone().unwrap_or_default()),
                 Cell::from(record.command.clone().unwrap_or_default()),
-                Cell::from(record.status.clone()),
+                Cell::from(record.status_label().to_string()),
             ])
         });
         let pages = total_pages(self.records_total, self.page_size);
@@ -1800,6 +1833,7 @@ mod tests {
     enum Fixture {
         Empty,
         Workstation,
+        Legacy,
         Actions,
     }
 
@@ -1934,6 +1968,7 @@ mod tests {
         match fixture {
             Fixture::Empty => json!([]),
             Fixture::Workstation => json!(["workstation", "other"]),
+            Fixture::Legacy => json!(["network"]),
             Fixture::Actions => json!(["client"]),
         }
         .to_string()
@@ -1956,6 +1991,7 @@ mod tests {
                     "created_at": 1_700_000_000
                 }
             ]),
+            Fixture::Legacy => json!([]),
             Fixture::Actions if !state.token_revoked.load(Ordering::Relaxed) => json!([{
                 "token": "tspan_revoke_me",
                 "client_id": "client",
@@ -1979,6 +2015,15 @@ mod tests {
                 "end_time": 1_700_000_120,
                 "duration_seconds": 120,
                 "status": "completed"
+            })),
+            Fixture::Legacy => records.push(json!({
+                "id": 1083,
+                "client_id": "network",
+                "alias": "网络中断: 192.168.71.1",
+                "command": "ping 192.168.71.1",
+                "start_time": 1_783_294_212_i64,
+                "end_time": 1_783_297_948_i64,
+                "duration_seconds": 3_736
             })),
             Fixture::Actions => {
                 if !state.record_deleted.load(Ordering::Relaxed) {
@@ -2049,13 +2094,13 @@ mod tests {
                 "alias": null,
                 "process_id": null
             }]),
-            Fixture::Empty | Fixture::Actions => json!([]),
+            Fixture::Empty | Fixture::Legacy | Fixture::Actions => json!([]),
         };
         active.to_string()
     }
 
     fn stats_payload(fixture: Fixture) -> String {
-        let total_times = i64::from(matches!(fixture, Fixture::Workstation));
+        let total_times = i64::from(matches!(fixture, Fixture::Workstation | Fixture::Legacy));
         json!({
             "total": {
                 "total_days": 1,
@@ -2131,10 +2176,25 @@ mod tests {
         assert_eq!(app.current_client(), "workstation");
         assert_eq!(app.overview.as_ref().unwrap().stats.total.total_times, 1);
         assert_eq!(app.records.len(), 1);
-        assert_eq!(app.records[0].status, "completed");
+        assert_eq!(app.records[0].status_label(), "completed");
+        assert!(!app.legacy_records_api);
         assert_eq!(app.active.len(), 1);
         assert_eq!(app.tokens.len(), 1);
         assert!(app.client_ids.iter().any(|client| client == "other"));
+    }
+
+    #[test]
+    fn missing_status_from_legacy_server_is_inferred_with_warning() {
+        let server = TestServer::new(Fixture::Legacy);
+        let app = App::new(options(&server, "network")).unwrap();
+
+        assert_eq!(app.records.len(), 1);
+        assert_eq!(app.records[0].status, None);
+        assert_eq!(app.records[0].status_label(), "completed");
+        assert!(app.legacy_records_api);
+        let notice = app.notice.as_ref().unwrap();
+        assert!(notice.is_warning);
+        assert!(notice.text.contains("omits record status"));
     }
 
     #[test]

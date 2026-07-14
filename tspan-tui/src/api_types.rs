@@ -144,7 +144,18 @@ pub struct RecordPageItem {
     pub start_time: i64,
     pub end_time: Option<i64>,
     pub duration_seconds: Option<i64>,
-    pub status: String,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+impl RecordPageItem {
+    pub fn status_label(&self) -> &str {
+        match self.status.as_deref() {
+            Some(status) => status,
+            None if self.end_time.is_some() || self.duration_seconds.is_some() => "completed",
+            None => "active",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

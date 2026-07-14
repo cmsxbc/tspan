@@ -80,6 +80,8 @@ umask 077
 
 `-v` / `--verbose` writes every API method and URL, HTTP status, and unmodified response body to stderr. Authorization headers are never printed. Redirect stderr as shown above to avoid interfering with the full-screen interface. Raw responses can contain API tokens, tracked commands, and other sensitive data, so protect and delete debug logs appropriately.
 
+The TUI accepts older `/api/records` responses that do not include `status`. It infers completed or active status from the record timestamps and displays a yellow `LEGACY API` compatibility warning so administrators know the server should be upgraded.
+
 The TUI provides summary and grouped statistics, paginated record browsing, active-session management, and API token generation/revocation. Press `?` for complete keyboard help. Common keys are:
 
 | Key | Action |
