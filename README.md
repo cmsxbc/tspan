@@ -95,6 +95,10 @@ The TUI provides summary and grouped statistics, paginated record browsing, acti
 | `d` | Delete, discard, or revoke the selected item after confirmation |
 | `q` / `Ctrl-C` | Quit |
 
+The two filters interlock, so cycling them only ever lands on a combination that has records behind it. The alias filter offers just the aliases recorded for the selected client, and the client filter offers just the clients that recorded the selected alias — pin an alias and `[` / `]` skips over the clients that never used it. A client that exists only as an API token, with no records yet, is left out of the filter entirely; its tokens are still listed under `all clients`. Both filters are built from completed records, so an alias that appears only on a currently running session is not offered until that session ends.
+
+`--client-id` and `--alias` are the exception: a client or alias requested on the command line stays selected even when it has no records, so `--alias meetings --client-id workstation` still opens on that (possibly empty) view. Cycling away from it drops it from the list.
+
 ## API Endpoints
 
 Client ingestion endpoints use `Authorization: Bearer <token>`. Statistics and admin endpoints use HTTP Basic Auth; ending a session accepts either authentication method.
