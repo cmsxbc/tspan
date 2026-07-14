@@ -47,9 +47,11 @@ RESPONSE=$(curl -sf -X POST "$SERVER_URL/api/sessions/start" \
   -d "$PAYLOAD")
 SESSION_ID=$(echo "$RESPONSE" | grep -o '"session_id":[0-9]*' | cut -d: -f2)
 
-# Run user command
-"$@"
-EXIT_CODE=$?
+# Run user command. Do not let `set -e` abort the wrapper when the wrapped
+# command exits non-zero — we must still end the session below, otherwise every
+# failing command would leave an orphaned session with no recorded duration.
+EXIT_CODE=0
+"$@" || EXIT_CODE=$?
 
 # Notify server end with retry
 for i in 1 2 3; do

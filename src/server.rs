@@ -725,6 +725,7 @@ th{font-size:12px;color:#666;font-weight:600}
 </div>
 <script>
 let recState = {page:1, perPage:50};
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 const COLOR_SCHEMES = {
   heatmap: { name: '热力图', empty: '#ebedf0', low: '#9be9a8', medium: '#f9d71c', high: '#e5534b' },
   traffic: { name: '交通灯', empty: '#ebedf0', low: '#2da44e', medium: '#f9d71c', high: '#cf222e' },
@@ -1021,7 +1022,7 @@ async function loadClientStats() {
     html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
   } else {
     data.forEach(s => {
-      html += '<tr><td>' + s.client_id + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+      html += '<tr><td>' + esc(s.client_id) + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
     });
   }
   html += '</table>';
@@ -1036,7 +1037,7 @@ async function loadAliasStats() {
     html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
   } else {
     data.forEach(s => {
-      html += '<tr><td>' + s.alias + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+      html += '<tr><td>' + esc(s.alias) + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
     });
   }
   html += '</table>';
@@ -1054,7 +1055,7 @@ async function loadCommandStats() {
     html += '<tr><td colspan="4" style="text-align:center;color:#666;">No data</td></tr>';
   } else {
     data.forEach(s => {
-      html += '<tr><td class="code">' + (s.command||'-') + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
+      html += '<tr><td class="code">' + esc(s.command||'-') + '</td><td>' + s.total_seconds_hr + '</td><td>' + s.total_times + '</td><td>' + s.mean_seconds_hr + '</td></tr>';
     });
   }
   html += '</table>';
@@ -1211,7 +1212,7 @@ async function loadRecords() {
     html += '<tr><td colspan="7" style="text-align:center;color:#666;">No records</td></tr>';
   } else {
     data.records.forEach(rec => {
-      html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td></tr>';
+      html += '<tr><td>' + rec.id + '</td><td>' + esc(rec.client_id||'-') + '</td><td>' + esc(rec.alias||'-') + '</td><td class="code">' + esc(rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td></tr>';
     });
   }
   html += '</table>';
@@ -1326,7 +1327,7 @@ th{font-size:12px;color:#666;font-weight:600}
             html.push_str(&format!(
                 r#"<tr><td class="code">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&c.id),
-                c.name.as_deref().unwrap_or("-"),
+                html_escape(c.name.as_deref().unwrap_or("-")),
                 created,
                 last_seen
             ));
@@ -1353,7 +1354,7 @@ th{font-size:12px;color:#666;font-weight:600}
                 r#"<tr><td>{}</td><td>{}</td><td>{}</td><td class="code">{}</td><td>{}</td><td>{}</td><td>{}s</td>
                 <td><button class="btn btn-end" onclick="endSession({})">End</button>
                 <button class="btn btn-discard" onclick="discardSession({})">Discard</button></td></tr>"#,
-                r.id, r.client_id, alias, html_escape(cmd), pid_str, start_str, running, r.id, r.id
+                r.id, html_escape(&r.client_id), html_escape(alias), html_escape(cmd), pid_str, start_str, running, r.id, r.id
             ));
         }
         html.push_str("</table>");
@@ -1382,7 +1383,7 @@ th{font-size:12px;color:#666;font-weight:600}
                 <td><button class="btn btn-discard" onclick="revokeToken('{}')">Revoke</button></td></tr>"#,
                 preview,
                 html_escape(&t.client_id),
-                t.description.as_deref().unwrap_or("-"),
+                html_escape(t.description.as_deref().unwrap_or("-")),
                 created,
                 html_escape(&t.token)
             ));
@@ -1430,6 +1431,7 @@ async function revokeToken(token) {
     const r = await fetch('/api/admin/tokens/' + encodeURIComponent(token), {method:'DELETE'});
     if(r.ok) location.reload(); else alert('Failed: ' + r.status);
 }
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmtDate(ts) {
     if(!ts) return '-';
     const d = new Date(ts*1000);
@@ -1462,7 +1464,7 @@ async function loadAdminRecords() {
         html += '<tr><td colspan="8" style="text-align:center;color:#666;">No records</td></tr>';
     } else {
         data.records.forEach(rec => {
-            html += '<tr><td>' + rec.id + '</td><td>' + (rec.client_id||'-') + '</td><td>' + (rec.alias||'-') + '</td><td class="code">' + (rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td><td><button class="btn btn-discard" onclick="deleteRecord(' + rec.id + ')">Delete</button></td></tr>';
+            html += '<tr><td>' + rec.id + '</td><td>' + esc(rec.client_id||'-') + '</td><td>' + esc(rec.alias||'-') + '</td><td class="code">' + esc(rec.command||'-') + '</td><td>' + fmtDate(rec.start_time) + '</td><td>' + fmtDate(rec.end_time) + '</td><td class="col-dur">' + fmtDur(rec.duration_seconds) + '</td><td><button class="btn btn-discard" onclick="deleteRecord(' + rec.id + ')">Delete</button></td></tr>';
         });
     }
     html += '</table>';
